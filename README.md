@@ -129,7 +129,7 @@ La première bêta publique cible Windows.
 
 Deux distributions sont prévues :
 
-### Installateur
+### Installateurs pour Linux et Mac Os
 
 ```text
 Ecrivain-Setup-0.6.0-beta.exe
