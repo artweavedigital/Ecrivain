@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-src 'self' data: blob:;">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Écrivain</title>
+    <link rel="stylesheet" href="vendor/vis-timeline.min.css">
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <div id="app" class="app">
+        <header class="projectbar">
+            <div class="projectbar__brand">
+                <div class="brand-seal" aria-hidden="true">
+                    <img src="assets/branding/ecrivain-logo.png" alt="">
+                </div>
+                <div class="projectbar__identity">
+                    <div class="projectbar__eyebrow">ÉCRIVAIN · ATELIER D’ÉCRITURE</div>
+                    <h1 id="projectTitle">Aucun projet ouvert</h1>
+                    <p id="projectSubtitle">Créez un projet ou ouvrez un projet Écrivain existant.</p>
+                </div>
+            </div>
+            <div class="projectbar__meta">
+                <span class="chip" id="languageChip">FR</span>
+                <span class="chip" id="chapterCount">0 chapitre</span>
+                <span class="chip" id="wordCount">0 mot</span>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <aside id="sidebar" class="sidebar">
+                <div class="panel-head">
+                    <div>
+                        <h2>Manuscrit</h2>
+                        <p>Glissez pour modifier l’ordre. Les sous-chapitres restent attachés à leur chapitre.</p>
+                    </div>
+                    <button id="newChapterBtn" class="icon-button" title="Nouveau chapitre" aria-label="Nouveau chapitre">＋</button>
+                </div>
+
+                <div id="emptySidebar" class="empty-sidebar">
+                    Aucun chapitre.
+                </div>
+                <div id="chapterList" class="chapter-list" aria-label="Liste des chapitres"></div>
+            </aside>
+
+            <section class="editor-panel">
+                <div id="welcome" class="welcome">
+                    <div class="welcome-card">
+                        <div class="welcome-mark welcome-mark--logo"><img src="assets/branding/ecrivain-logo.png" alt="Écrivain"></div>
+                        <h2>Écrivain</h2>
+                        <p>La version autonome d’Écrivain. Les projets restent enregistrés localement sur votre ordinateur.</p>
+                        <div class="welcome-actions">
+                            <button id="welcomeNew" class="button button-primary">Nouveau projet</button>
+                            <button id="welcomeOpen" class="button">Ouvrir un projet</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="editorArea" class="editor-area" hidden>
+                    <div class="editor-head">
+                        <div class="editor-title-block">
+                            <label for="chapterTitle">Titre du chapitre</label>
+                            <input id="chapterTitle" type="text" autocomplete="off">
+                        </div>
+                        <div class="editor-status-block">
+                            <label for="chapterStatus">Statut</label>
+                            <select id="chapterStatus">
+                                <option value="draft">Brouillon</option>
+                                <option value="writing">En cours</option>
+                                <option value="review">À relire</option>
+                                <option value="final">Finalisé</option>
+                                <option value="cut">Coupé</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="editor-toolbar" aria-label="Barre d’édition">
+                        <div class="toolbar-group" aria-label="Annuler et rétablir">
+                            <button type="button" data-command="undo" title="Annuler (Ctrl+Z)" aria-label="Annuler">↶</button>
+                            <button type="button" data-command="redo" title="Rétablir (Ctrl+Y)" aria-label="Rétablir">↷</button>
+                        </div>
+
+                        <span class="toolbar-separator"></span>
+
+                        <div class="toolbar-group" aria-label="Mise en forme">
+                            <button type="button" data-command="bold" title="Gras (Ctrl+B)"><strong>G</strong></button>
+                            <button type="button" data-command="italic" title="Italique (Ctrl+I)"><em>I</em></button>
+                            <button type="button" data-command="underline" title="Souligné (Ctrl+U)"><u>S</u></button>
+                            <button type="button" data-command="superscript" title="Exposant — ex. XXIᵉ siècle" aria-label="Exposant"><span class="toolbar-superscript">x<sup>2</sup></span></button>
+                        </div>
+
+                        <span class="toolbar-separator"></span>
+
+                        <div class="toolbar-group toolbar-group--styles" aria-label="Styles de paragraphe">
+                            <button type="button" data-block="p">Texte</button>
+                            <button type="button" data-block="h2">Titre</button>
+                            <button type="button" data-block="blockquote">Citation</button>
+                        </div>
+
+                        <span class="toolbar-separator"></span>
+
+                        <div class="toolbar-group toolbar-group--dialogue" aria-label="Dialogue et typographie française">
+                            <button id="insertDialogueDash" type="button" class="toolbar-text-button" title="Insérer un tiret cadratin de dialogue">— Dialogue</button>
+                            <button id="normalizeTypography" type="button" class="toolbar-text-button" title="Normaliser la typographie française du chapitre">Typo FR</button>
+                        </div>
+
+                        <span class="toolbar-separator"></span>
+
+                        <div class="toolbar-group toolbar-group--chars" aria-label="Caractères français">
+                            <span class="toolbar-label">Caractères</span>
+                            <button type="button" data-insert="À" title="Insérer À">À</button>
+                            <button type="button" data-insert="É" title="Insérer É">É</button>
+                            <button type="button" data-insert="È" title="Insérer È">È</button>
+                            <button type="button" data-insert="Ç" title="Insérer Ç">Ç</button>
+                            <button type="button" data-insert="Œ" title="Insérer Œ">Œ</button>
+                            <button type="button" data-insert="« " title="Ouvrir les guillemets français">«</button>
+                            <button type="button" data-insert=" »" title="Fermer les guillemets français">»</button>
+                            <button type="button" data-insert="—" title="Insérer un tiret cadratin">—</button>
+                            <button type="button" data-insert="…" title="Insérer des points de suspension">…</button>
+                        </div>
+
+                        <span class="toolbar-spacer"></span>
+                        <span id="saveState" class="save-state">Enregistré</span>
+                        <button id="saveBtn" type="button" class="save-button">Enregistrer</button>
+                    </div>
+
+                    <div id="chapterSearchBar" class="chapter-search-bar" hidden>
+                        <div class="chapter-search-main">
+                            <label class="chapter-search-field">
+                                <span>Rechercher</span>
+                                <input id="chapterSearchQuery" type="search" autocomplete="off" placeholder="Mot ou expression…">
+                            </label>
+                            <button id="chapterSearchPrev" type="button" class="chapter-search-nav" title="Occurrence précédente" aria-label="Occurrence précédente">↑</button>
+                            <button id="chapterSearchNext" type="button" class="chapter-search-nav" title="Occurrence suivante" aria-label="Occurrence suivante">↓</button>
+                            <span id="chapterSearchCount" class="chapter-search-count">0 / 0</span>
+                            <label class="chapter-search-check"><input id="chapterSearchCase" type="checkbox"> Respecter la casse</label>
+                            <label class="chapter-search-check"><input id="chapterSearchWholeWord" type="checkbox"> Mot entier</label>
+                            <button id="chapterSearchClose" type="button" class="chapter-search-close" title="Fermer" aria-label="Fermer">×</button>
+                        </div>
+                        <div id="chapterReplaceRow" class="chapter-replace-row" hidden>
+                            <label class="chapter-search-field chapter-replace-field">
+                                <span>Remplacer par</span>
+                                <input id="chapterReplaceValue" type="text" autocomplete="off" placeholder="Nouveau texte…">
+                            </label>
+                            <button id="chapterReplaceOne" type="button" class="button">Remplacer</button>
+                            <button id="chapterReplaceAll" type="button" class="button button-primary">Remplacer tout</button>
+                            <span class="chapter-replace-scope">Chapitre en cours uniquement</span>
+                        </div>
+                    </div>
+
+                    <div class="paper-wrap">
+                        <article id="chapterContent" class="paper" contenteditable="true" spellcheck="true" aria-label="Texte du chapitre"></article>
+                        <div id="chapterInvisibleOverlay" class="invisible-overlay" aria-hidden="true"></div>
+                        <div id="chapterEndMarker" class="chapter-end-marker" hidden>
+                            <span class="chapter-end-marker__rule"></span>
+                            <span class="chapter-end-marker__label">Fin du chapitre · saut de page à l’export</span>
+                            <span class="chapter-end-marker__rule"></span>
+                        </div>
+                    </div>
+
+                    <footer class="statusbar">
+                        <span id="activeProjectPath">Aucun projet ouvert</span>
+                        <div class="statusbar__right">
+                            <span id="chapterWords">0 mot</span>
+                            <div class="zoom-control" title="Zoom de l’interface — Ctrl + / Ctrl −">
+                                <button id="zoomOutBtn" type="button" aria-label="Réduire le zoom" title="Zoom arrière">−</button>
+                                <input id="zoomSlider" type="range" min="80" max="150" step="5" value="100" aria-label="Zoom de l’interface">
+                                <button id="zoomInBtn" type="button" aria-label="Augmenter le zoom" title="Zoom avant">+</button>
+                                <span id="zoomLabel" class="zoom-control__label">100 %</span>
+                            </div>
+                        </div>
+                    </footer>
+                </div>
+
+                <section id="globalSynopsisView" class="global-synopsis-view" hidden>
+                    <div class="global-synopsis-head">
+                        <div>
+                            <div class="global-synopsis-eyebrow">PROJET</div>
+                            <h2>Synopsis global</h2>
+                            <p>Vue d’ensemble du roman : pitch, synopsis complet et notes de structure. Ce contenu reste séparé du manuscrit et des exports.</p>
+                        </div>
+                        <div class="global-synopsis-head__actions">
+                            <span id="globalSynopsisSaveState" class="global-synopsis-save-state">Enregistré</span>
+                            <button id="globalSynopsisBackBtn" type="button" class="button">Retour au manuscrit</button>
+                            <button id="globalSynopsisSaveBtn" type="button" class="button button-primary">Enregistrer</button>
+                        </div>
+                    </div>
+
+                    <div class="global-synopsis-shell">
+                        <label class="global-synopsis-title-field">
+                            <span>Titre de travail</span>
+                            <input id="globalSynopsisTitle" type="text" autocomplete="off" placeholder="Titre du synopsis ou du projet">
+                        </label>
+
+                        <div class="global-synopsis-grid">
+                            <section class="global-synopsis-panel global-synopsis-panel--main">
+                                <div class="global-synopsis-panel__head">
+                                    <div>
+                                        <h3>Synopsis</h3>
+                                        <p>Déroulé global de l’histoire, du début à la fin.</p>
+                                    </div>
+                                    <span id="globalSynopsisMainCount" class="global-synopsis-counter">0 mot</span>
+                                </div>
+                                <textarea id="globalSynopsisMain" class="global-synopsis-textarea global-synopsis-textarea--main" spellcheck="true" placeholder="Rédigez ici le synopsis complet du roman…"></textarea>
+                            </section>
+
+                            <div class="global-synopsis-side">
+                                <section class="global-synopsis-panel">
+                                    <div class="global-synopsis-panel__head">
+                                        <div>
+                                            <h3>Pitch</h3>
+                                            <p>Une présentation courte de l’histoire.</p>
+                                        </div>
+                                        <span id="globalSynopsisPitchCount" class="global-synopsis-counter">0 mot</span>
+                                    </div>
+                                    <textarea id="globalSynopsisPitch" class="global-synopsis-textarea global-synopsis-textarea--pitch" spellcheck="true" placeholder="Quelques lignes pour résumer l’essentiel…"></textarea>
+                                </section>
+
+                                <section class="global-synopsis-panel">
+                                    <div class="global-synopsis-panel__head">
+                                        <div>
+                                            <h3>Notes de structure</h3>
+                                            <p>Arcs, points de bascule, problèmes à résoudre, idées de réorganisation.</p>
+                                        </div>
+                                        <span id="globalSynopsisNotesCount" class="global-synopsis-counter">0 mot</span>
+                                    </div>
+                                    <textarea id="globalSynopsisNotes" class="global-synopsis-textarea global-synopsis-textarea--notes" spellcheck="true" placeholder="Notes de structure…"></textarea>
+                                </section>
+                            </div>
+                        </div>
+
+                        <footer class="global-synopsis-footer">
+                            <span id="globalSynopsisTotalCount">0 mot au total</span>
+                            <span id="globalSynopsisUpdated">Dernière modification : —</span>
+                        </footer>
+                    </div>
+                </section>
+
+                <section id="synopsisView" class="synopsis-view" hidden>
+                    <div class="synopsis-head">
+                        <div>
+                            <div class="synopsis-eyebrow">PROJET</div>
+                            <h2>Synoptique</h2>
+                            <p>Fiches libres pour les scènes, personnages, lieux, idées et recherches.</p>
+                        </div>
+                        <div class="synopsis-head__actions">
+                            <button id="synopsisBackBtn" type="button" class="button">Retour au manuscrit</button>
+                            <button id="synopsisNewBtn" type="button" class="button button-primary">Nouvelle fiche</button>
+                        </div>
+                    </div>
+
+                    <div class="synopsis-filterbar">
+                        <strong>Filtrer</strong>
+                        <div id="synopsisFilters" class="synopsis-filters" role="toolbar" aria-label="Filtres du synoptique"></div>
+                        <span id="synopsisCount" class="synopsis-count">0 fiche</span>
+                    </div>
+
+                    <div class="synopsis-board-wrap">
+                        <div id="synopsisEmpty" class="synopsis-empty">
+                            Aucune fiche. Créez une fiche pour préparer une scène, un personnage, un lieu ou une idée sans modifier le manuscrit.
+                        </div>
+                        <div id="synopsisBoard" class="synopsis-board" aria-label="Fiches du synoptique"></div>
+                    </div>
+                </section>
+
+                <section id="notesView" class="notes-view" hidden>
+                    <div class="notes-head">
+                        <div>
+                            <div class="notes-eyebrow">PROJET</div>
+                            <h2>Notes</h2>
+                            <p>Notes du livre et des chapitres, séparées du manuscrit et de ses exports.</p>
+                        </div>
+                        <div class="notes-head__actions">
+                            <button id="notesBackBtn" type="button" class="button">Retour au manuscrit</button>
+                            <button id="notesOpenFolderBtn" type="button" class="button" title="Ouvrir le dossier où Écrivain regroupe les fichiers joints">📁 Fichiers du projet</button>
+                            <button id="notesNewFileBtn" type="button" class="button">Joindre un fichier</button>
+                            <button id="notesNewTextBtn" type="button" class="button button-primary">Nouvelle note</button>
+                        </div>
+                    </div>
+
+                    <div id="notesListPane">
+                        <div class="notes-filterbar">
+                            <label class="notes-search-wrap">
+                                <span>Rechercher</span>
+                                <input id="notesSearch" type="search" placeholder="Titre ou contenu…" autocomplete="off">
+                            </label>
+                            <label>
+                                <span>Catégorie</span>
+                                <select id="notesCategoryFilter"><option value="all">Toutes</option></select>
+                            </label>
+                            <label>
+                                <span>Portée</span>
+                                <select id="notesScopeFilter">
+                                    <option value="all">Toutes</option>
+                                    <option value="book">Livre entier</option>
+                                    <option value="chapter">Chapitre actif</option>
+                                </select>
+                            </label>
+                            <span id="notesCount" class="notes-count">0 note</span>
+                        </div>
+
+                        <div id="notesEmpty" class="notes-empty">
+                            Aucune note. Créez une note texte ou joignez un document de référence.
+                        </div>
+                        <div id="notesGrid" class="notes-grid" aria-label="Liste des notes"></div>
+                    </div>
+
+                    <div id="noteReader" class="note-reader" hidden>
+                        <div class="note-reader__top">
+                            <button id="noteReaderBackBtn" type="button" class="button">← Toutes les notes</button>
+                            <div class="note-reader__actions">
+                                <button id="noteReaderOpenFileBtn" type="button" class="button" hidden>Ouvrir le fichier</button>
+                                <button id="noteReaderEditBtn" type="button" class="button">Modifier</button>
+                                <button id="noteReaderDeleteBtn" type="button" class="button danger-button">Supprimer</button>
+                            </div>
+                        </div>
+                        <div id="noteReaderCard" class="note-reader__card">
+                            <div id="noteReaderMeta" class="note-reader__meta"></div>
+                            <h3 id="noteReaderTitle">Note</h3>
+                            <div id="noteReaderContent" class="note-reader__content"></div>
+                            <div id="noteReaderFile" class="note-reader__file" hidden></div>
+                            <p id="noteReaderUpdated" class="note-reader__updated"></p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="timelineView" class="timeline-view" hidden>
+                    <div class="timeline-head">
+                        <div>
+                            <div class="timeline-eyebrow">PROJET</div>
+                            <h2>Chronologie</h2>
+                            <p>Frise narrative des scènes, personnages, lieux et chapitres liés.</p>
+                        </div>
+                        <div class="timeline-head__actions">
+                            <button id="timelineBackBtn" type="button" class="button">Retour au manuscrit</button>
+                            <button id="timelineNewBtn" type="button" class="button button-primary">Nouvel événement</button>
+                        </div>
+                    </div>
+
+                    <div class="timeline-toolbar">
+                        <label>
+                            <span>Échelle</span>
+                            <select id="timelineScale">
+                                <option value="day">Jour</option>
+                                <option value="week" selected>Semaine</option>
+                                <option value="month">Mois</option>
+                            </select>
+                        </label>
+                        <button id="timelineFitBtn" type="button" class="button">Centrer la frise</button>
+                        <span id="timelineCount" class="timeline-count">0 événement</span>
+                    </div>
+
+                    <div class="timeline-layout">
+                        <div class="timeline-main">
+                            <div class="timeline-card-block">
+                                <div id="timelineEmpty" class="timeline-empty">
+                                    Aucun événement daté. Créez une scène dans le panneau de droite pour amorcer la frise.
+                                </div>
+                                <div id="timelineCanvas" class="timeline-canvas" aria-label="Frise chronologique"></div>
+                            </div>
+
+                            <section id="timelineTempo" class="timeline-tempo" hidden>
+                                <h3>Rythme des chapitres liés</h3>
+                                <div id="timelineTempoBars" class="timeline-tempo-bars"></div>
+                            </section>
+
+                            <section class="timeline-list-wrap">
+                                <div class="timeline-section-title">
+                                    <div>
+                                        <h3>Événements de la chronologie</h3>
+                                        <p>Action en tête, personnages au centre et lieu en pied.</p>
+                                    </div>
+                                </div>
+                                <div id="timelineList" class="timeline-list"></div>
+                            </section>
+                        </div>
+
+                        <aside class="timeline-side">
+                            <form id="timelineForm" class="timeline-form">
+                                <div class="timeline-form-head">
+                                    <h3 id="timelineFormTitle">Nouvel événement</h3>
+                                    <button id="timelineClearBtn" type="button" class="link-button">Nouveau</button>
+                                </div>
+                                <input id="timelineId" type="hidden">
+
+                                <fieldset>
+                                    <legend>Scène</legend>
+                                    <label>
+                                        <span>Action / titre</span>
+                                        <input id="timelineTitle" type="text" placeholder="Ex. Rencontre avec le chef" required>
+                                    </label>
+                                    <label>
+                                        <span>Fil narratif</span>
+                                        <input id="timelineLane" type="text" list="timelineLaneList" value="Récit principal" placeholder="Récit principal">
+                                        <datalist id="timelineLaneList"></datalist>
+                                    </label>
+                                </fieldset>
+
+                                <fieldset>
+                                    <legend>Temps</legend>
+                                    <div class="timeline-form-grid">
+                                        <label>
+                                            <span>Date début</span>
+                                            <input id="timelineStartDate" type="date">
+                                        </label>
+                                        <label>
+                                            <span>Heure début</span>
+                                            <input id="timelineStartTime" type="time">
+                                        </label>
+                                        <label>
+                                            <span>Date fin</span>
+                                            <input id="timelineEndDate" type="date">
+                                        </label>
+                                        <label>
+                                            <span>Heure fin</span>
+                                            <input id="timelineEndTime" type="time">
+                                        </label>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset>
+                                    <legend>Présence dans la scène</legend>
+                                    <div class="timeline-form-grid">
+                                        <label>
+                                            <span>Personnage principal</span>
+                                            <input id="timelinePrimaryCharacter" type="text" placeholder="McAllistair">
+                                        </label>
+                                        <label>
+                                            <span>Lieu</span>
+                                            <input id="timelineLocation" type="text" placeholder="Haida Gwaii">
+                                        </label>
+                                    </div>
+                                    <label>
+                                        <span>Personnages dans la scène</span>
+                                        <input id="timelineCharacters" type="text" placeholder="Darkside, Kovack, Haanna">
+                                    </label>
+                                </fieldset>
+
+                                <fieldset>
+                                    <legend>Mémoire de scène</legend>
+                                    <label>
+                                        <span>Chapitre lié</span>
+                                        <select id="timelineChapter"><option value="">Aucun chapitre lié</option></select>
+                                    </label>
+                                    <label>
+                                        <span>Résumé / intrigue</span>
+                                        <textarea id="timelineSummary" rows="6"></textarea>
+                                    </label>
+                                </fieldset>
+
+                                <div class="timeline-form-actions">
+                                    <button id="timelineDeleteBtn" type="button" class="button danger-button" hidden>Supprimer</button>
+                                    <button type="submit" class="button button-primary">Enregistrer</button>
+                                </div>
+                            </form>
+
+                            <section class="timeline-help">
+                                <strong>Repères de lecture</strong>
+                                <p>La couleur du cadre correspond au personnage porteur de la scène. Une scène peut être déplacée directement sur la frise pour changer sa date.</p>
+                            </section>
+
+                            <section class="timeline-palette">
+                                <div class="timeline-palette__head">
+                                    <strong>Palette des personnages</strong>
+                                    <button id="timelineAddColorBtn" type="button" class="link-button">Ajouter</button>
+                                </div>
+                                <div id="timelinePaletteRows" class="timeline-palette__rows"></div>
+                                <button id="timelineSavePaletteBtn" type="button" class="button">Enregistrer les couleurs</button>
+                            </section>
+                        </aside>
+                    </div>
+                </section>
+
+
+
+                <section id="mindmapView" class="mindmap-view" hidden>
+                    <div class="mindmap-head">
+                        <div>
+                            <div class="mindmap-eyebrow">PROJET</div>
+                            <h2>Carte mentale</h2>
+                            <p>Personnages, lieux, intrigues, chapitres, idées et objets reliés visuellement.</p>
+                        </div>
+                        <div class="mindmap-head__actions">
+                            <label class="mindmap-search-wrap">
+                                <span>Rechercher</span>
+                                <input id="mindmapSearch" type="search" placeholder="Nom, note, type…" autocomplete="off">
+                            </label>
+                            <button id="mindmapAutoBtn" type="button" class="button">Réorganiser</button>
+                            <button id="mindmapExportBtn" type="button" class="button">Exporter PNG</button>
+                            <button id="mindmapAddBtn" type="button" class="button button-primary">Nouvel élément</button>
+                            <button id="mindmapBackBtn" type="button" class="button">Retour au manuscrit</button>
+                        </div>
+                    </div>
+
+                    <div class="mindmap-legendbar">
+                        <span class="mindmap-legendbar__label">Repères</span>
+                        <div id="mindmapLegend" class="mindmap-legend"></div>
+                        <span class="mindmap-legendbar__hint">Double-clic dans la carte : créer · Double-clic sur un élément lié : ouvrir son chapitre</span>
+                    </div>
+
+                    <div class="mindmap-workspace">
+                        <div id="mindmapCanvas" class="mindmap-canvas" aria-label="Carte mentale interactive">
+                            <div id="mindmapWorld" class="mindmap-world">
+                                <svg id="mindmapEdges" class="mindmap-edges" width="4200" height="3000" viewBox="0 0 4200 3000" aria-hidden="true"></svg>
+                                <div id="mindmapNodes" class="mindmap-nodes"></div>
+                            </div>
+                            <div id="mindmapEmpty" class="mindmap-empty">
+                                <strong>Votre carte mentale est vide.</strong>
+                                <span>Ajoutez un élément, ou double-cliquez dans cette zone pour commencer.</span>
+                            </div>
+                            <div class="mindmap-zoom" role="toolbar" aria-label="Zoom de la carte mentale">
+                                <button id="mindmapZoomOut" type="button" title="Zoom arrière">−</button>
+                                <span id="mindmapZoomLabel">100 %</span>
+                                <button id="mindmapZoomIn" type="button" title="Zoom avant">+</button>
+                                <button id="mindmapFit" type="button" title="Centrer toute la carte">Centrer</button>
+                            </div>
+                        </div>
+
+                        <aside id="mindmapInspector" class="mindmap-inspector">
+                            <div class="mindmap-inspector__head">
+                                <div>
+                                    <span>INSPECTEUR</span>
+                                    <h3 id="mindmapInspectorTitle">Carte mentale</h3>
+                                </div>
+                            </div>
+
+                            <div id="mindmapInspectorEmpty" class="mindmap-inspector-empty">
+                                <p>Sélectionnez un élément pour modifier son nom, son type, sa note et ses relations.</p>
+                                <p>Les éléments se déplacent directement à la souris. Leur position est enregistrée automatiquement.</p>
+                                <button type="button" class="button button-primary" onclick="document.getElementById('mindmapAddBtn').click()">Créer un élément</button>
+                            </div>
+
+                            <form id="mindmapInspectorForm" class="mindmap-inspector-form" hidden>
+                                <input id="mindmapNodeId" type="hidden">
+                                <label>
+                                    <span>Nom</span>
+                                    <input id="mindmapNodeLabel" type="text" maxlength="120" required placeholder="Ex. Fox Darkside">
+                                </label>
+                                <div class="mindmap-form-grid">
+                                    <label>
+                                        <span>Type</span>
+                                        <select id="mindmapNodeType"></select>
+                                    </label>
+                                    <label>
+                                        <span>Chapitre lié</span>
+                                        <select id="mindmapNodeChapter"></select>
+                                    </label>
+                                </div>
+                                <label>
+                                    <span>Note de résumé</span>
+                                    <textarea id="mindmapNodeNote" rows="4" maxlength="4000" placeholder="Résumé bref, rôle, enjeu…"></textarea>
+                                </label>
+                                <div class="mindmap-inspector-actions">
+                                    <button id="mindmapNodeDelete" type="button" class="button danger-button">Supprimer</button>
+                                    <button type="submit" class="button button-primary">Enregistrer</button>
+                                </div>
+
+                                <section class="mindmap-relations-section">
+                                    <div class="mindmap-relations-head">
+                                        <div>
+                                            <strong>Relations</strong>
+                                            <small>Liens sortants de cet élément.</small>
+                                        </div>
+                                    </div>
+                                    <div id="mindmapRelations" class="mindmap-relations"></div>
+                                    <div class="mindmap-relation-form">
+                                        <label>
+                                            <span>Vers</span>
+                                            <select id="mindmapRelationTarget"></select>
+                                        </label>
+                                        <label>
+                                            <span>Relation</span>
+                                            <input id="mindmapRelationLabel" type="text" maxlength="180" placeholder="Ex. confrère GRC, suspecte, se trouve à…">
+                                        </label>
+                                        <div class="mindmap-relation-actions">
+                                            <button id="mindmapRelationCancel" type="button" class="button" hidden>Annuler</button>
+                                            <button id="mindmapRelationSave" type="button" class="button">Ajouter le lien</button>
+                                        </div>
+                                    </div>
+                                </section>
+                            </form>
+                        </aside>
+                    </div>
+                </section>
+
+                <section id="projectSearchView" class="project-search-view" hidden>
+                    <div class="project-search-head">
+                        <div>
+                            <div class="project-search-eyebrow">ÉDITION</div>
+                            <h2 id="projectSearchTitle">Rechercher dans le projet</h2>
+                            <p>Recherche sur le contenu de tous les chapitres. Un clic sur un résultat ouvre le chapitre concerné.</p>
+                        </div>
+                        <button id="projectSearchBackBtn" type="button" class="button button-primary">Retour au manuscrit</button>
+                    </div>
+
+                    <div class="project-search-controls">
+                        <label class="project-search-query">
+                            <span>Rechercher</span>
+                            <input id="projectSearchQuery" type="search" autocomplete="off" placeholder="Mot ou expression…">
+                        </label>
+                        <label id="projectSearchReplaceWrap" class="project-search-query project-search-replace" hidden>
+                            <span>Remplacer par</span>
+                            <input id="projectSearchReplace" type="text" autocomplete="off" placeholder="Nouveau texte…">
+                        </label>
+                        <div class="project-search-options">
+                            <label><input id="projectSearchCase" type="checkbox"> Respecter la casse</label>
+                            <label><input id="projectSearchWholeWord" type="checkbox"> Mot entier</label>
+                        </div>
+                        <button id="projectSearchRunBtn" type="button" class="button button-primary">Rechercher</button>
+                    </div>
+
+                    <div class="project-search-summary-row">
+                        <strong id="projectSearchSummary">Saisissez un mot ou une expression.</strong>
+                        <button id="projectReplaceAction" type="button" class="button button-danger" hidden>Remplacer dans tout le projet</button>
+                    </div>
+
+                    <div id="projectReplaceConfirm" class="project-replace-confirm" hidden>
+                        <div>
+                            <strong>Confirmation avant modification globale</strong>
+                            <p id="projectReplaceConfirmText"></p>
+                        </div>
+                        <div class="project-replace-confirm-actions">
+                            <button id="projectReplaceConfirmCancel" type="button" class="button">Annuler</button>
+                            <button id="projectReplaceConfirmRun" type="button" class="button button-danger">Confirmer le remplacement global</button>
+                        </div>
+                    </div>
+
+                    <div id="projectSearchEmpty" class="project-search-empty" hidden>Aucune occurrence trouvée.</div>
+                    <div id="projectSearchResults" class="project-search-results"></div>
+                </section>
+
+                <section id="backupsView" class="safety-view backups-view" hidden>
+                    <div class="safety-head">
+                        <div>
+                            <div class="safety-eyebrow">SÉCURITÉ DU PROJET</div>
+                            <h2>Sauvegardes</h2>
+                            <p>Écrivain conserve au maximum cinq sauvegardes complètes du projet. Les sauvegardes et l’historique eux-mêmes ne sont pas recopiés dans les sauvegardes.</p>
+                        </div>
+                        <div class="safety-head__actions">
+                            <button id="backupsOpenFolderBtn" type="button" class="button">📁 Dossier des sauvegardes</button>
+                            <button id="backupsCreateBtn" type="button" class="button button-primary">Sauvegarder maintenant</button>
+                            <button id="backupsBackBtn" type="button" class="button">Retour au manuscrit</button>
+                        </div>
+                    </div>
+                    <div class="safety-summary">
+                        <span id="backupsCount">0 sauvegarde</span>
+                        <span>Rotation automatique : 5 sauvegardes maximum</span>
+                    </div>
+                    <div id="backupsEmpty" class="safety-empty">Aucune sauvegarde du projet pour le moment.</div>
+                    <div id="backupsGrid" class="backups-grid"></div>
+                </section>
+
+                <section id="historyView" class="safety-view history-view" hidden>
+                    <div class="safety-head">
+                        <div>
+                            <div class="safety-eyebrow">HISTORIQUE ÉDITORIAL</div>
+                            <h2>Historique des chapitres</h2>
+                            <p>Consultez, comparez et restaurez les versions précédentes sans perdre la version actuelle.</p>
+                        </div>
+                        <div class="safety-head__actions">
+                            <button id="historyRefreshBtn" type="button" class="button">Actualiser</button>
+                            <button id="historyBackBtn" type="button" class="button button-primary">Retour au manuscrit</button>
+                        </div>
+                    </div>
+
+                    <div class="history-toolbar">
+                        <label>
+                            <span>Chapitre</span>
+                            <select id="historyChapterSelect"></select>
+                        </label>
+                        <span id="historyCount" class="history-count">0 version</span>
+                    </div>
+
+                    <div class="history-layout">
+                        <section class="history-versions-panel">
+                            <div class="safety-panel-head">
+                                <div>
+                                    <h3>Versions enregistrées</h3>
+                                    <p>Les sauvegardes manuelles créent un jalon. Les autosauvegardes ajoutent au maximum un jalon toutes les dix minutes.</p>
+                                </div>
+                            </div>
+                            <div id="historyEmpty" class="safety-empty">Aucune ancienne version pour ce chapitre.</div>
+                            <div id="historyVersions" class="history-versions"></div>
+                        </section>
+
+                        <section class="history-compare-panel">
+                            <div class="safety-panel-head history-compare-head">
+                                <div>
+                                    <h3>Comparer deux versions</h3>
+                                    <p>Les suppressions apparaissent à gauche et les ajouts à droite.</p>
+                                </div>
+                                <button id="historyCompareBtn" type="button" class="button">Comparer</button>
+                            </div>
+                            <div class="history-compare-selects">
+                                <label>
+                                    <span>Version A</span>
+                                    <select id="historyVersionA"></select>
+                                </label>
+                                <label>
+                                    <span>Version B</span>
+                                    <select id="historyVersionB"></select>
+                                </label>
+                            </div>
+                            <div id="historyComparePlaceholder" class="history-compare-placeholder">Choisissez deux versions puis cliquez sur « Comparer ».</div>
+                            <div id="historyCompareResult" class="history-compare-result" hidden>
+                                <div class="history-compare-labels">
+                                    <strong id="historyCompareLabelA">Version A</strong>
+                                    <strong id="historyCompareLabelB">Version B</strong>
+                                </div>
+                                <div id="historyDiffRows" class="history-diff-rows"></div>
+                            </div>
+                        </section>
+                    </div>
+                </section>
+
+                <section id="statsView" class="stats-view" hidden>
+                    <div class="stats-head">
+                        <div>
+                            <div class="stats-eyebrow">PROJET</div>
+                            <h2>Statistiques</h2>
+                            <p>Vue d’ensemble du manuscrit et progression d’écriture sur les sept derniers jours.</p>
+                        </div>
+                        <div class="stats-head__actions">
+                            <button id="statsRefreshBtn" type="button" class="button">Actualiser</button>
+                            <button id="statsBackBtn" type="button" class="button button-primary">Retour au manuscrit</button>
+                        </div>
+                    </div>
+
+                    <div id="statsKpis" class="stats-kpis">
+                        <article class="stats-kpi"><span>Total du manuscrit</span><strong id="statsTotalWords">0</strong><small>mots</small></article>
+                        <article class="stats-kpi"><span>Exportable</span><strong id="statsExportWords">0</strong><small id="statsExcluded">0 chapitre exclu</small></article>
+                        <article class="stats-kpi"><span>Aujourd’hui</span><strong id="statsTodayWords">0</strong><small>mots ajoutés</small></article>
+                        <article class="stats-kpi"><span>7 derniers jours</span><strong id="statsWeekWords">0</strong><small>mots ajoutés</small></article>
+                        <article class="stats-kpi"><span>Chapitres</span><strong id="statsChapterCount">0</strong><small>dans le projet</small></article>
+                        <article class="stats-kpi"><span>Moyenne</span><strong id="statsAverageWords">0</strong><small>mots / chapitre</small></article>
+                    </div>
+
+                    <div class="stats-grid">
+                        <section class="stats-panel">
+                            <div class="stats-panel__head">
+                                <div>
+                                    <h3>Progression sur 7 jours</h3>
+                                    <p>Seuls les mots ajoutés lors des sauvegardes sont comptabilisés.</p>
+                                </div>
+                            </div>
+                            <div id="statsDailyChart" class="stats-daily-chart" aria-label="Mots ajoutés pendant les sept derniers jours"></div>
+                        </section>
+
+                        <section class="stats-panel">
+                            <div class="stats-panel__head">
+                                <div>
+                                    <h3>État des chapitres</h3>
+                                    <p>Répartition selon le statut de travail.</p>
+                                </div>
+                            </div>
+                            <div id="statsStatusList" class="stats-status-list"></div>
+                        </section>
+                    </div>
+
+                    <section class="stats-panel stats-chapters-panel">
+                        <div class="stats-panel__head">
+                            <div>
+                                <h3>Répartition par chapitre</h3>
+                                <p>Nombre de mots actuellement enregistrés dans chaque chapitre.</p>
+                            </div>
+                        </div>
+                        <div id="statsChapterList" class="stats-chapter-list"></div>
+                    </section>
+                </section>
+            </section>
+
+                <section id="aiView" class="ai-view" hidden>
+                    <header class="feature-header ai-header">
+                        <div>
+                            <p class="feature-kicker">Outils</p>
+                            <h2>Assistant IA</h2>
+                            <p>Choisissez une IA locale gratuite ou un fournisseur avec votre propre clé API. Écrivain ne modifie jamais le manuscrit automatiquement.</p>
+                        </div>
+                        <button id="aiBackBtn" type="button" class="button">Retour au manuscrit</button>
+                    </header>
+
+                    <div class="ai-intro" role="note">
+                        <strong>À savoir :</strong>
+                        <span>Écrivain n’embarque aucun modèle IA. Avec Ollama ou LM Studio, il faut installer l’application et au moins un modèle. Avec un service distant, il faut une clé API du fournisseur.</span>
+                    </div>
+
+                    <div class="ai-layout">
+                        <section class="ai-panel ai-panel--settings">
+                            <div class="ai-panel-heading">
+                                <div>
+                                    <span class="ai-step">1</span>
+                                    <strong>Connexion</strong>
+                                </div>
+                                <span id="aiConnectionState" class="ai-connection-state">Non testée</span>
+                            </div>
+
+                            <label class="ai-field">
+                                <span>Service</span>
+                                <select id="aiProvider"></select>
+                            </label>
+
+                            <div id="aiProviderHelp" class="ai-provider-help" aria-live="polite"></div>
+
+                            <label id="aiApiKeyField" class="ai-field">
+                                <span>Clé API</span>
+                                <input id="aiApiKey" type="password" autocomplete="off" spellcheck="false">
+                            </label>
+                            <p id="aiKeyHint" class="ai-hint"></p>
+                            <p id="aiSecureHint" class="ai-secure-hint"></p>
+
+                            <details class="ai-advanced">
+                                <summary>Réglages avancés</summary>
+                                <label class="ai-field">
+                                    <span>Adresse du service</span>
+                                    <input id="aiBaseUrl" type="text" spellcheck="false">
+                                </label>
+                            </details>
+
+                            <label class="ai-field">
+                                <span>Modèle</span>
+                                <input id="aiModel" type="text" list="aiModelList" spellcheck="false" placeholder="Chargez la liste ou saisissez le nom du modèle">
+                                <datalist id="aiModelList"></datalist>
+                            </label>
+
+                            <div id="aiStatusDetail" class="ai-status-detail" hidden></div>
+
+                            <div class="ai-settings-actions ai-actions-sticky">
+                                <button id="aiTestConnectionBtn" type="button" class="button button-primary">1. Tester</button>
+                                <button id="aiLoadModelsBtn" type="button" class="button">2. Charger les modèles</button>
+                                <button id="aiSaveSettingsBtn" type="button" class="button">Enregistrer</button>
+                                <button id="aiGuideBtn" type="button" class="button button-small">Guide</button>
+                                <button id="aiClearKeyBtn" type="button" class="button ai-clear-key">Effacer la clé</button>
+                            </div>
+                        </section>
+
+                        <section class="ai-panel ai-panel--request">
+                            <div class="ai-panel-heading">
+                                <div>
+                                    <span class="ai-step">2</span>
+                                    <strong>Travail demandé</strong>
+                                </div>
+                            </div>
+
+                            <div class="ai-request-grid">
+                                <label class="ai-field">
+                                    <span>Action</span>
+                                    <select id="aiTask">
+                                        <option value="analyse">Analyse éditoriale</option>
+                                        <option value="repetitions">Répétitions et lourdeurs</option>
+                                        <option value="coherence">Cohérence</option>
+                                        <option value="resume">Résumé</option>
+                                        <option value="reformulation">Reformulation</option>
+                                        <option value="libre">Question libre</option>
+                                    </select>
+                                </label>
+
+                                <label class="ai-field">
+                                    <span>Contexte</span>
+                                    <select id="aiScope">
+                                        <option value="selection">Sélection du chapitre</option>
+                                        <option value="chapter">Chapitre courant</option>
+                                        <option value="synopsis">Synopsis global</option>
+                                        <option value="project">Manuscrit entier</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <p id="aiScopeHint" class="ai-hint"></p>
+
+                            <label class="ai-field ai-field--grow">
+                                <span>Consigne complémentaire <small>(facultatif)</small></span>
+                                <textarea id="aiPrompt" rows="6" placeholder="Ex. : ne corrige pas le style, cherche uniquement les incohérences de chronologie."></textarea>
+                            </label>
+
+                            <div class="ai-privacy-note">
+                                <strong>Contrôle de l’auteur</strong>
+                                <p>La réponse reste séparée du manuscrit. Rien n’est inséré ou enregistré sans votre action.</p>
+                            </div>
+
+                            <div class="ai-run-wrap ai-actions-sticky">
+                                <button id="aiRunBtn" type="button" class="button button-primary ai-run-button">Lancer l’analyse</button>
+                            </div>
+                        </section>
+
+                        <section class="ai-panel ai-panel--result">
+                            <div class="ai-panel-heading">
+                                <div>
+                                    <span class="ai-step">3</span>
+                                    <strong>Réponse</strong>
+                                </div>
+                                <div class="ai-result-actions">
+                                    <button id="aiCopyBtn" type="button" class="button button-small">Copier</button>
+                                    <button id="aiClearBtn" type="button" class="button button-small">Effacer</button>
+                                </div>
+                            </div>
+                            <p id="aiResultMeta" class="ai-result-meta">Aucune réponse pour l’instant.</p>
+                            <div id="aiResult" class="ai-result" aria-live="polite"></div>
+                        </section>
+                    </div>
+                </section>
+
+
+                <section id="pluginsView" class="plugins-view" hidden>
+                    <div class="feature-head plugins-head">
+                        <div>
+                            <span class="feature-kicker">OUTILS</span>
+                            <h2>Extensions</h2>
+                            <p>Ajoutez des outils à Écrivain sans modifier son noyau. Les extensions sont installées hors ligne depuis un fichier <strong>.ecrivain-plugin</strong>.</p>
+                        </div>
+                        <div class="feature-head-actions">
+                            <button id="pluginsOpenFolderBtn" type="button" class="button">Dossier des extensions</button>
+                            <button id="pluginsInstallBtn" type="button" class="button button-primary">Installer une extension…</button>
+                            <button id="pluginsBackBtn" type="button" class="button">← Manuscrit</button>
+                        </div>
+                    </div>
+
+                    <div class="plugins-safety">
+                        <div class="plugins-safety__icon">🛡</div>
+                        <div>
+                            <strong>Extensions isolées</strong>
+                            <p>Une extension ne reçoit que les permissions affichées ci-dessous. Son interface s’exécute dans un espace isolé, sans accès direct à vos fichiers ni au système Windows.</p>
+                        </div>
+                    </div>
+
+                    <div class="plugins-layout">
+                        <section class="plugins-panel plugins-panel--list">
+                            <div class="plugins-panel-head">
+                                <div>
+                                    <h3>Extensions installées</h3>
+                                    <p id="pluginsCount">0 extension</p>
+                                </div>
+                            </div>
+                            <div id="pluginsEmpty" class="plugins-empty">
+                                <div class="plugins-empty__mark">🧩</div>
+                                <strong>Aucune extension installée</strong>
+                                <p>Utilisez « Installer une extension… » pour ajouter un fichier .ecrivain-plugin.</p>
+                            </div>
+                            <div id="pluginsList" class="plugins-list"></div>
+                        </section>
+
+                        <section class="plugins-panel plugins-panel--runtime">
+                            <div class="plugins-panel-head plugins-runtime-head">
+                                <div>
+                                    <span class="feature-kicker">UTILISATION DE L’EXTENSION</span>
+                                    <h3 id="pluginRuntimeTitle">Aucune extension sélectionnée</h3>
+                                    <p id="pluginRuntimeSubtitle">Sélectionnez une extension installée pour afficher ses actions.</p>
+                                </div>
+                            </div>
+                            <div id="pluginRuntimeEmpty" class="plugin-runtime-empty">
+                                <div class="plugin-runtime-empty__mark">▶</div>
+                                <strong id="pluginRuntimeEmptyTitle">Aucune action lancée</strong>
+                                <p id="pluginRuntimeEmptyText">Sélectionnez une extension à gauche, puis choisissez l’action à exécuter.</p>
+                                <div id="pluginRuntimeActions" class="plugin-runtime-actions"></div>
+                            </div>
+                            <iframe id="pluginRuntimeFrame" class="plugin-runtime-frame" sandbox="allow-scripts" title="Extension Écrivain" hidden></iframe>
+                        </section>
+                    </div>
+                </section>
+
+                <section id="preferencesView" class="preferences-view" hidden>
+                    <div class="preferences-head">
+                        <div>
+                            <span class="feature-kicker">ÉCRIVAIN</span>
+                            <h2>Préférences</h2>
+                            <p>Réglez le comportement général de l’application. Les choix de mise en page propres à un roman restent dans <strong>Projet → Configuration du document</strong>.</p>
+                        </div>
+                        <button id="preferencesBack" type="button" class="button">← Retour au manuscrit</button>
+                    </div>
+
+                    <div class="preferences-grid">
+                        <section class="preference-card">
+                            <div class="preference-card__head"><span class="preference-icon">⌂</span><div><h3>Démarrage</h3><p>Ce qu’Écrivain affiche à son ouverture.</p></div></div>
+                            <label class="field"><span>Au démarrage</span><select id="prefStartup"><option value="welcome">Afficher l’accueil</option><option value="last-project">Rouvrir le dernier projet</option></select></label>
+                            <label class="field"><span>Projets récents affichés</span><select id="prefRecentLimit"><option value="3">3 projets</option><option value="5">5 projets</option></select></label>
+                            <label class="field"><span>Dossier par défaut des projets</span><div class="preference-folder-row"><input id="prefProjectsDir" type="text" readonly placeholder="Aucun dossier imposé"><button id="prefChooseProjectsDir" type="button" class="button button-small">Choisir…</button></div></label>
+                        </section>
+
+                        <section class="preference-card">
+                            <div class="preference-card__head"><span class="preference-icon">✎</span><div><h3>Écriture</h3><p>Confort de travail et nouveaux projets.</p></div></div>
+                            <label class="field"><span>Sauvegarde automatique après</span><select id="prefAutosave"><option value="1000">1 seconde d’inactivité</option><option value="1800">2 secondes d’inactivité</option><option value="3000">3 secondes d’inactivité</option><option value="5000">5 secondes d’inactivité</option><option value="10000">10 secondes d’inactivité</option></select></label>
+                            <label class="field"><span>Auteur par défaut</span><input id="prefAuthor" type="text" placeholder="Nom utilisé lors d’un nouveau projet"></label>
+                            <div class="preference-mini-grid preference-mini-grid--writing">
+                                <label class="field"><span>Police du manuscrit</span><select id="prefFont">
+                                    <option value="Garamond">Garamond</option>
+                                    <option value="EB Garamond">EB Garamond</option>
+                                    <option value="Georgia">Georgia</option>
+                                    <option value="Palatino Linotype">Palatino Linotype</option>
+                                    <option value="Book Antiqua">Book Antiqua</option>
+                                    <option value="Times New Roman">Times New Roman</option>
+                                    <option value="Cambria">Cambria</option>
+                                    <option value="Constantia">Constantia</option>
+                                    <option value="Calibri">Calibri</option>
+                                    <option value="Arial">Arial</option>
+                                </select></label>
+                                <label class="field"><span>Corps (pt)</span><input id="prefFontSize" type="number" min="7" max="30" step="0.5"></label>
+                                <label class="field"><span>Interligne (pt)</span><input id="prefLineSpacing" type="number" min="8" max="60" step="0.5"></label>
+                            </div>
+                            <p class="preference-note">Le corps et l’interligne sont exprimés en points typographiques (pt). Les polices proposées doivent être installées sur Windows pour être utilisées dans les exports.</p>
+                        </section>
+
+                        <section class="preference-card">
+                            <div class="preference-card__head"><span class="preference-icon">▣</span><div><h3>Nouveaux romans</h3><p>Valeurs proposées lors de la création.</p></div></div>
+                            <div class="preference-mini-grid">
+                                <label class="field"><span>Largeur (cm)</span><input id="prefPageWidth" type="number" min="8" max="40" step="0.1"></label>
+                                <label class="field"><span>Hauteur (cm)</span><input id="prefPageHeight" type="number" min="8" max="50" step="0.1"></label>
+                                <label class="field"><span>Marges (mm)</span><input id="prefMargin" type="number" min="0" max="50" step="0.5"></label>
+                                <label class="field"><span>Alinéa (mm)</span><input id="prefIndent" type="number" min="0" max="30" step="0.5"></label>
+                            </div>
+                            <p class="preference-note">Ces valeurs servent uniquement de point de départ. Chaque projet peut ensuite avoir sa propre configuration.</p>
+                        </section>
+
+                        <section class="preference-card">
+                            <div class="preference-card__head"><span class="preference-icon">Aa</span><div><h3>Interface</h3><p>Adapter la taille de l’application à votre écran.</p></div></div>
+                            <label class="field"><span>Zoom de l’interface</span><select id="prefZoom"><option value="0.8">80 %</option><option value="0.85">85 %</option><option value="0.9">90 %</option><option value="0.95">95 %</option><option value="1">100 %</option><option value="1.05">105 %</option><option value="1.1">110 %</option><option value="1.15">115 %</option><option value="1.2">120 %</option><option value="1.25">125 %</option><option value="1.3">130 %</option><option value="1.35">135 %</option><option value="1.4">140 %</option><option value="1.45">145 %</option><option value="1.5">150 %</option></select></label>
+                            <div class="preference-preview">
+                                <img src="assets/branding/ecrivain-logo.png" alt="">
+                                <div><strong>Écrivain</strong><span>Atelier d’écriture local</span></div>
+                            </div>
+                        </section>
+
+                        <section class="preference-card preference-card--security">
+                            <div class="preference-card__head"><span class="preference-icon">✓</span><div><h3>Sécurité</h3><p>Protections actives par défaut.</p></div></div>
+                            <ul class="preference-checks">
+                                <li><span>✓</span> Vérification silencieuse à l’ouverture</li>
+                                <li><span>✓</span> 5 sauvegardes complètes du projet</li>
+                                <li><span>✓</span> Historique des versions de chapitres</li>
+                                <li><span>✓</span> Sauvegarde avant remplacement global</li>
+                                <li><span>✓</span> Récupération des JSON endommagés</li>
+                            </ul>
+                        </section>
+
+                        <section class="preference-card">
+                            <div class="preference-card__head"><span class="preference-icon">⌘</span><div><h3>Données locales</h3><p>Écrivain garde vos réglages et extensions hors des romans.</p></div></div>
+                            <div class="preference-actions-stack">
+                                <button id="prefOpenData" type="button" class="button">Ouvrir les données d’Écrivain</button>
+                                <button id="prefOpenExtensions" type="button" class="button">Ouvrir le dossier des extensions</button>
+                            </div>
+                            <p id="prefDataPath" class="preference-path"></p>
+                        </section>
+                    </div>
+
+                    <div class="preferences-footer">
+                        <span id="preferencesSaveState">Préférences enregistrées localement.</span>
+                        <div><button id="preferencesReset" type="button" class="button">Valeurs par défaut</button><button id="preferencesSave" type="button" class="button button-primary">Enregistrer les préférences</button></div>
+                    </div>
+                </section>
+
+        </main>
+
+        <button id="fullscreenExitBtn" type="button" class="fullscreen-exit-button" hidden title="Quitter le plein écran (Échap)" aria-label="Quitter le plein écran">⤡ <span>Quitter le plein écran</span><kbd>Échap</kbd></button>
+
+        <div id="modalBackdrop" class="modal-backdrop" hidden>
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+                <h2 id="modalTitle"></h2>
+                <div id="modalBody"></div>
+                <div class="modal-actions">
+                    <button id="modalCancel" class="button">Annuler</button>
+                    <button id="modalConfirm" class="button button-primary">Valider</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="noteModalBackdrop" class="modal-backdrop" hidden>
+            <div class="modal modal--wide note-modal" role="dialog" aria-modal="true" aria-labelledby="noteModalTitle">
+                <h2 id="noteModalTitle">Note</h2>
+                <div id="noteModalBody"></div>
+                <div class="modal-actions">
+                    <button id="noteModalCancel" class="button">Annuler</button>
+                    <button id="noteModalConfirm" class="button button-primary">Enregistrer</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="chapterContextMenu" class="chapter-context-menu" role="menu" aria-label="Actions du chapitre" hidden>
+            <button type="button" data-context-action="open">Ouvrir</button>
+            <button type="button" data-context-action="new-child">Nouveau sous-chapitre…</button>
+            <div class="chapter-context-separator"></div>
+            <button type="button" data-context-action="indent">Transformer en sous-chapitre du précédent</button>
+            <button type="button" data-context-action="outdent">Remonter d’un niveau</button>
+            <div class="chapter-context-separator"></div>
+            <div class="chapter-context-label">Statut</div>
+            <button type="button" class="chapter-context-status" data-context-status="draft"><span class="chapter-status-dot status-draft"></span>Brouillon<span class="context-check">✓</span></button>
+            <button type="button" class="chapter-context-status" data-context-status="writing"><span class="chapter-status-dot status-writing"></span>En cours<span class="context-check">✓</span></button>
+            <button type="button" class="chapter-context-status" data-context-status="review"><span class="chapter-status-dot status-review"></span>À relire<span class="context-check">✓</span></button>
+            <button type="button" class="chapter-context-status" data-context-status="final"><span class="chapter-status-dot status-final"></span>Finalisé<span class="context-check">✓</span></button>
+            <button type="button" class="chapter-context-status" data-context-status="cut"><span class="chapter-status-dot status-cut"></span>Coupé<span class="context-check">✓</span></button>
+            <div class="chapter-context-separator"></div>
+            <button type="button" data-context-action="rename">Renommer…</button>
+            <button type="button" data-context-action="duplicate">Dupliquer</button>
+            <button type="button" class="chapter-context-danger" data-context-action="delete">Supprimer…</button>
+        </div>
+
+        <div id="settingsInfoBackdrop" class="modal-backdrop" hidden>
+            <div class="modal modal--wide settings-info-modal" role="dialog" aria-modal="true" aria-labelledby="settingsInfoTitle">
+                <div class="settings-info-head">
+                    <img id="settingsInfoLogo" src="assets/branding/ecrivain-logo.png" alt="" hidden>
+                    <div><span id="settingsInfoKicker" class="feature-kicker">ÉCRIVAIN</span><h2 id="settingsInfoTitle"></h2><p id="settingsInfoSubtitle"></p></div>
+                </div>
+                <div id="settingsInfoBody" class="settings-info-body"></div>
+                <div class="modal-actions">
+                    <button id="settingsInfoSecondary" class="button" hidden></button>
+                    <button id="settingsInfoClose" class="button button-primary">Fermer</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="toast" class="toast" hidden></div>
+    </div>
+
+    <script src="vendor/vis-timeline.min.js"></script>
+    <script src="app.js"></script>
+    <script src="global-synopsis.js"></script>
+    <script src="editor.js"></script>
+    <script src="notes.js"></script>
+    <script src="timeline.js"></script>
+    <script src="stats.js"></script>
+    <script src="mindmap.js"></script>
+    <script src="safety.js"></script>
+    <script src="search.js"></script>
+    <script src="ai.js"></script>
+    <script src="plugins.js"></script>
+    <script src="settings.js"></script>
+</body>
+</html>

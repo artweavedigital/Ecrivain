@@ -1,0 +1,47 @@
+name: Bug
+about: Signaler un problème reproductible dans Écrivain
+title: "[BUG] "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Problème rencontré
+      description: Décrivez simplement ce qui s’est produit.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: |
+        1. Ouvrir…
+        2. Cliquer…
+        3. Constater…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportement attendu
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version d’Écrivain
+      placeholder: 0.6.0 bêta
+  - type: dropdown
+    id: os
+    attributes:
+      label: Système
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Autre
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic
+      description: Si possible, joignez le rapport créé depuis Aide → Informations techniques.

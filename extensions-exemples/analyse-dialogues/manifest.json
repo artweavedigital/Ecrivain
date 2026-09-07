@@ -1,0 +1,19 @@
+{
+  "id": "analyse-dialogues",
+  "name": "Analyse des dialogues",
+  "version": "1.1.0",
+  "author": "Exemple Écrivain",
+  "description": "Analyse chaque chapitre du projet et affiche le nombre de paragraphes de dialogue, sans modifier le manuscrit.",
+  "icon": "💬",
+  "ecrivainApi": 1,
+  "permissions": [
+    "project.read",
+    "chapters.read"
+  ],
+  "commands": [
+    {
+      "id": "analyser-dialogues",
+      "label": "Analyser les dialogues"
+    }
+  ]
+}

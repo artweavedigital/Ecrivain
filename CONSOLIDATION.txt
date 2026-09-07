@@ -1,0 +1,14 @@
+ÉCRIVAIN 0.6.0 BÊTA — BASE DE RÉFÉRENCE
+
+Cette version est la base figée destinée au test sur un vrai manuscrit.
+
+Règles pour les versions suivantes :
+1. Ne jamais modifier le format de projet v1 sans migration explicite.
+2. Ne jamais supprimer une fonction validée sans justification et test de régression.
+3. Sauvegarder avant les opérations globales destructrices.
+4. Ne jamais enregistrer une clé API dans le dossier d’un roman.
+5. Préserver la simplicité de l’interface principale.
+6. Corriger d’abord les bugs et irritants observés en usage réel avant d’ajouter de nouvelles fonctions.
+
+En cas de problème reproductible, joindre le rapport créé via :
+Aide → Informations techniques → Créer un rapport de diagnostic…

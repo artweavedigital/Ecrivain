@@ -1,0 +1,19 @@
+name: Idée / amélioration
+about: Proposer une amélioration issue de l’usage réel
+title: "[IDÉE] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Besoin rencontré
+      description: Dans quelle situation cette amélioration vous aurait-elle été utile ?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposition
+      description: Décrivez la solution souhaitée sans obligation de détail technique.
+    validations:
+      required: true

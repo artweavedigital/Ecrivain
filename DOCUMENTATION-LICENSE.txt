@@ -1,0 +1,10 @@
+DOCUMENTATION OFFICIELLE D’ÉCRIVAIN
+
+Sauf mention contraire, la documentation originale distribuée avec Écrivain est
+mise à disposition sous Creative Commons Attribution — Utilisation non commerciale
+— Pas d’Œuvre dérivée 4.0 International (CC BY-NC-ND 4.0).
+
+https://creativecommons.org/licenses/by-nc-nd/4.0/
+
+Cette licence documentaire ne s’applique pas au code source du logiciel, régi par
+le fichier LICENSE.

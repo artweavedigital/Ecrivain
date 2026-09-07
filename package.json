@@ -1,0 +1,29 @@
+{
+  "name": "ecrivain",
+  "version": "0.6.0-beta.1",
+  "description": "Écrivain — atelier d’écriture local, simple et extensible pour auteurs francophones",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check app.js && node --check editor.js && node --check global-synopsis.js && node --check notes.js && node --check timeline.js && node --check stats.js && node --check mindmap.js && node --check safety.js && node --check search.js && node --check ai.js && node --check plugins.js && node --check settings.js && node --check packager-extension.js",
+    "package:win": "electron-packager . Ecrivain --platform=win32 --arch=x64 --out=dist --overwrite --asar --icon=assets/branding/ecrivain.ico --ignore=\"^/dist($|/)\" --ignore=\"^/.git($|/)\" --ignore=\"^/.github($|/)\"",
+    "package:linux": "electron-packager . Ecrivain --platform=linux --arch=x64 --out=dist --overwrite --asar --icon=assets/branding/ecrivain-256.png --ignore=\"^/dist($|/)\" --ignore=\"^/.git($|/)\" --ignore=\"^/.github($|/)\"",
+    "package:mac:x64": "electron-packager . Ecrivain --platform=darwin --arch=x64 --out=dist --overwrite --asar --icon=assets/branding/ecrivain.icns --ignore=\"^/dist($|/)\" --ignore=\"^/.git($|/)\" --ignore=\"^/.github($|/)\"",
+    "package:mac:arm64": "electron-packager . Ecrivain --platform=darwin --arch=arm64 --out=dist --overwrite --asar --icon=assets/branding/ecrivain.icns --ignore=\"^/dist($|/)\" --ignore=\"^/.git($|/)\" --ignore=\"^/.github($|/)\""
+  },
+  "keywords": [
+    "writing",
+    "roman",
+    "electron",
+    "français"
+  ],
+  "author": "Projet initié par Pantélis Matsos ; conception fonctionnelle et poursuite par Stéphane Matsos",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "@electron/packager": "20.3.0"
+  },
+  "productName": "Écrivain",
+  "private": false
+}
