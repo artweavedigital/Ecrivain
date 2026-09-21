@@ -1,5 +1,65 @@
 # Journal des versions
 
+## 0.6.0 bêta.6
+
+### Grammalecte et extensions
+
+- API d’extensions v3 avec permission `chapters.write` limitée aux corrections explicitement validées ;
+- application d’une suggestion Grammalecte directement dans le chapitre, avec historique normal du chapitre ;
+- synchronisation du chapitre en mémoire afin d’éviter qu’une autosauvegarde n’écrase la correction ;
+- interface Grammalecte recentrée dans l’espace disponible ;
+- boutons de correction et d’ignorance directement sous chaque problème ;
+- exemple Grammalecte livré avec Écrivain mis à niveau : suppression de l’ancienne préversion « moteur à brancher ».
+
+## 0.6.0 bêta.5
+
+### Extensions : correctif d’exécution et ergonomie
+
+- correction du lancement des extensions : le document `srcdoc` conserve son bac à sable, mais son code et son style sont désormais chargés comme ressources `data:` externes autorisées par la politique de sécurité, au lieu d’utiliser du JavaScript inline bloqué par Chromium ;
+- délai de démarrage porté à 12 secondes pour les extensions lourdes ;
+- affichage d’un message d’échec plus clair lorsqu’une extension ne démarre pas ;
+- gestionnaire d’extensions simplifié : une liste unique, un bouton **Ouvrir** évident et les permissions rangées dans **Détails et permissions** ;
+- l’extension ouverte utilise désormais toute la largeur de l’espace de travail au lieu d’un petit panneau à droite ;
+- bouton **← Extensions** pour revenir immédiatement au gestionnaire ;
+- l’installation d’une extension ne l’ouvre plus automatiquement : elle apparaît dans la liste puis l’utilisateur choisit **Ouvrir**.
+
+### Grammalecte
+
+- compatibilité avec le paquet séparé `Correcteur français — Grammalecte 0.2.1`, qui embarque le moteur Grammalecte 2.3.0 local ;
+- aucun texte n’est envoyé en ligne par le moteur Grammalecte.
+
+## 0.6.0 bêta.4
+
+### Préparation de Grammalecte
+
+- passage de l’API d’extensions à la **v2**, avec compatibilité conservée pour les extensions API v1 ;
+- ajout de ressources privées aux paquets `.ecrivain-plugin` pour pouvoir embarquer ultérieurement un moteur JavaScript et ses données sans les intégrer au cœur d’Écrivain ;
+- limite des paquets portée à 16 Mo, avec limites séparées pour le code, le style et les ressources ;
+- nouvelles méthodes `ecrivain.resources.list()`, `text()` et `json()` pour les extensions API v2 ;
+- ajout d’une préversion installable **Correcteur français — Grammalecte** ;
+- interface à onglets inspirée de la présentation de Grammalecte mais harmonisée avec Écrivain : Correcteur, Lexicographe, Conjugueur et Typographie ;
+- lecture des chapitres du projet et pré-analyse typographique locale ;
+- le véritable moteur Grammalecte n’est pas encore embarqué : la préversion ne prétend pas effectuer une correction grammaticale complète.
+
+## 0.6.0 bêta.3
+
+### Correcteur orthographique intégré
+
+- activation explicite du correcteur Chromium/Hunspell d’Electron ;
+- dictionnaire français sélectionné automatiquement sous Windows et Linux ;
+- soulignement des mots inconnus pendant la frappe ;
+- suggestions orthographiques au clic droit sur un mot signalé ;
+- remplacement immédiat par la suggestion choisie ;
+- ajout d’un mot au dictionnaire personnalisé depuis le clic droit ;
+- option **Préférences → Écriture → Correcteur orthographique français** pour activer ou désactiver la correction ;
+- journalisation discrète du chargement du dictionnaire pendant la bêta.
+
+### Ergonomie de l’éditeur
+
+- clic droit dans un texte éditable : suggestions orthographiques puis **Couper**, **Copier**, **Coller** et **Tout sélectionner** ;
+- ajout d’une croix **×** en haut à droite des fenêtres modales pour les fermer directement ;
+- la croix d’un formulaire équivaut à **Annuler** et ne valide donc pas les modifications en cours.
+
 ## 0.6.0 bêta
 
 ### Finalisation de la bêta

@@ -9,7 +9,7 @@ let currentProjectDir = null;
 const PROJECT_FORMAT_ID = 'ecrivain-project';
 const PROJECT_FORMAT_VERSION = 1;
 const PROJECT_SCHEMA_VERSION = '1.4.0';
-const APP_VERSION = '0.6.0-beta.1';
+const APP_VERSION = '0.6.0-beta.6';
 const MAX_RECENT_PROJECTS = 5;
 
 // Identité de l'application et verrou d'instance unique.
@@ -647,6 +647,7 @@ const DEFAULT_PREFERENCES = Object.freeze({
     defaultAuthor: '',
     recentProjectsLimit: 5,
     autosaveDelayMs: 1800,
+    spellcheckEnabled: true,
     uiZoom: 1,
     newProjectFont: 'Garamond',
     newProjectFontSizePt: 11,
@@ -665,6 +666,7 @@ function sanitizePreferences(input = {}) {
     const startupBehavior = input.startupBehavior === 'last-project' ? 'last-project' : 'welcome';
     const recentProjectsLimit = [3, 5].includes(Number(input.recentProjectsLimit)) ? Number(input.recentProjectsLimit) : 5;
     const autosaveDelayMs = [1000, 1800, 3000, 5000, 10000].includes(Number(input.autosaveDelayMs)) ? Number(input.autosaveDelayMs) : 1800;
+    const spellcheckEnabled = input.spellcheckEnabled !== false;
     const uiZoomRaw = Number(input.uiZoom);
     const uiZoomClamped = Number.isFinite(uiZoomRaw) ? Math.min(1.5, Math.max(0.8, uiZoomRaw)) : 1;
     const uiZoom = Math.round(uiZoomClamped * 20) / 20;
@@ -678,6 +680,7 @@ function sanitizePreferences(input = {}) {
         defaultAuthor: String(input.defaultAuthor || '').trim(),
         recentProjectsLimit,
         autosaveDelayMs,
+        spellcheckEnabled,
         uiZoom,
         newProjectFont: String(input.newProjectFont || 'Garamond').trim() || 'Garamond',
         newProjectFontSizePt: num(input.newProjectFontSizePt, 11, 7, 30),
@@ -710,6 +713,7 @@ async function savePreferences(payload = {}) {
     saveRecentProjectsSync(loadRecentProjectsSync().slice(0, prefs.recentProjectsLimit));
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.setZoomFactor(prefs.uiZoom);
+        applySpellCheckerPreferences(prefs);
         emitWindowState();
     }
     if (app.isReady()) buildMenu();
@@ -726,6 +730,32 @@ function preferencesState() {
         userDataDir: app.getPath('userData'),
         pluginsDir: pluginsRootDir()
     };
+}
+
+
+function applySpellCheckerPreferences(prefs = loadPreferencesSync()) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+        const ses = mainWindow.webContents.session;
+        const enabled = prefs?.spellcheckEnabled !== false;
+        ses.setSpellCheckerEnabled(enabled);
+        if (!enabled || process.platform === 'darwin') return;
+
+        const available = Array.isArray(ses.availableSpellCheckerLanguages)
+            ? ses.availableSpellCheckerLanguages
+            : [];
+        const french = available.find((code) => String(code).toLowerCase() === 'fr')
+            || available.find((code) => String(code).toLowerCase() === 'fr-fr')
+            || available.find((code) => String(code).toLowerCase().startsWith('fr'));
+        if (french) {
+            ses.setSpellCheckerLanguages([french]);
+            writeDiagnostic('INFO', 'Correcteur orthographique activé.', { language: french });
+        } else {
+            writeDiagnostic('WARN', 'Aucun dictionnaire français Hunspell n’est annoncé par Electron.');
+        }
+    } catch (error) {
+        writeDiagnostic('WARN', 'Initialisation du correcteur orthographique impossible.', error);
+    }
 }
 
 async function pickDefaultProjectsDirectory() {
@@ -4049,21 +4079,28 @@ async function replaceAcrossProject(query, replacement, options = {}) {
 
 
 // -----------------------------------------------------------------------------
-// Extensions — API v1
+// Extensions — API v3
 // Les extensions sont des fichiers .ecrivain-plugin (JSON) installés globalement.
 // Leur code s'exécute dans un iframe sandboxé côté interface. Le processus principal
 // n'expose que les données explicitement autorisées par les permissions du manifeste.
+// API v2 a ajouté les ressources privées de l'extension.
+// API v3 ajoute des corrections de texte contrôlées : une extension ne peut modifier
+// qu'un passage précis d'un chapitre et uniquement avec la permission chapters.write.
 // -----------------------------------------------------------------------------
 const PLUGIN_PACKAGE_FORMAT = 'ecrivain-plugin';
 const PLUGIN_PACKAGE_VERSION = 1;
-const PLUGIN_API_VERSION = 1;
-const PLUGIN_MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
-const PLUGIN_MAX_CODE_BYTES = 768 * 1024;
-const PLUGIN_MAX_STYLE_BYTES = 192 * 1024;
+const PLUGIN_API_VERSION = 3;
+const PLUGIN_SUPPORTED_API_VERSIONS = new Set([1, 2, 3]);
+const PLUGIN_MAX_PACKAGE_BYTES = 16 * 1024 * 1024;
+const PLUGIN_MAX_CODE_BYTES = 1024 * 1024;
+const PLUGIN_MAX_STYLE_BYTES = 512 * 1024;
+const PLUGIN_MAX_RESOURCES_BYTES = 12 * 1024 * 1024;
+const PLUGIN_MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
 const PLUGIN_MAX_STORAGE_BYTES = 512 * 1024;
 const PLUGIN_ALLOWED_PERMISSIONS = new Set([
     'project.read',
     'chapters.read',
+    'chapters.write',
     'storage.read',
     'storage.write'
 ]);
@@ -4086,6 +4123,24 @@ function safePluginId(value) {
         throw new Error('Identifiant d’extension invalide. Utilisez 3 à 64 caractères : lettres minuscules, chiffres, point, tiret ou soulignement.');
     }
     return id;
+}
+
+function safePluginResourcePath(value) {
+    const raw = String(value || '').replace(/\\/g, '/').trim();
+    if (!raw || raw.length > 240 || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) {
+        throw new Error('Chemin de ressource d’extension invalide.');
+    }
+    const parts = raw.split('/');
+    if (parts.some((part) => !part || part === '.' || part === '..' || !/^[A-Za-z0-9._ -]+$/.test(part))) {
+        throw new Error('Chemin de ressource d’extension invalide.');
+    }
+    return parts.join('/');
+}
+
+function pluginResourceFile(pluginId, resourcePath) {
+    const id = safePluginId(pluginId);
+    const safePath = safePluginResourcePath(resourcePath);
+    return path.join(pluginDir(id), 'resources', ...safePath.split('/'));
 }
 
 function loadPluginRegistrySync() {
@@ -4131,7 +4186,9 @@ function validatePluginManifest(raw = {}) {
     if (!manifest.name || manifest.name.length > 80) throw new Error('Le nom de l’extension est obligatoire (80 caractères maximum).');
     if (!manifest.version || manifest.version.length > 30) throw new Error('La version de l’extension est obligatoire.');
     if (manifest.author.length > 100 || manifest.description.length > 500) throw new Error('Métadonnées d’extension trop longues.');
-    if (manifest.ecrivainApi !== PLUGIN_API_VERSION) throw new Error(`Cette extension utilise l’API ${manifest.ecrivainApi}. Écrivain prend en charge l’API ${PLUGIN_API_VERSION}.`);
+    if (!PLUGIN_SUPPORTED_API_VERSIONS.has(manifest.ecrivainApi)) {
+        throw new Error(`Cette extension utilise l’API ${manifest.ecrivainApi}. Écrivain prend en charge les API 1 à ${PLUGIN_API_VERSION}.`);
+    }
 
     for (const permission of manifest.permissions) {
         if (!PLUGIN_ALLOWED_PERMISSIONS.has(permission)) throw new Error(`Permission d’extension inconnue : ${permission}`);
@@ -4222,7 +4279,7 @@ async function installPluginPackage() {
 
     const source = picked.filePaths[0];
     const stat = await fs.stat(source);
-    if (stat.size > PLUGIN_MAX_PACKAGE_BYTES) throw new Error('Le fichier d’extension dépasse la taille maximale autorisée (2 Mo).');
+    if (stat.size > PLUGIN_MAX_PACKAGE_BYTES) throw new Error('Le fichier d’extension dépasse la taille maximale autorisée (16 Mo).');
 
     let pkg;
     try {
@@ -4237,9 +4294,24 @@ async function installPluginPackage() {
     const manifest = validatePluginManifest(pkg.manifest || {});
     const code = String(pkg.code || '');
     const style = String(pkg.style || '');
+    const resources = pkg?.resources && typeof pkg.resources === 'object' && !Array.isArray(pkg.resources) ? pkg.resources : {};
     if (!code.trim()) throw new Error('L’extension ne contient aucun code.');
     if (Buffer.byteLength(code, 'utf8') > PLUGIN_MAX_CODE_BYTES) throw new Error('Le code de l’extension est trop volumineux.');
     if (Buffer.byteLength(style, 'utf8') > PLUGIN_MAX_STYLE_BYTES) throw new Error('La feuille de style de l’extension est trop volumineuse.');
+
+    let resourcesBytes = 0;
+    const normalizedResources = [];
+    for (const [rawPath, rawValue] of Object.entries(resources)) {
+        const resourcePath = safePluginResourcePath(rawPath);
+        if (typeof rawValue !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(rawValue)) {
+            throw new Error(`Ressource d’extension invalide : ${resourcePath}`);
+        }
+        const data = Buffer.from(rawValue, 'base64');
+        if (data.byteLength > PLUGIN_MAX_RESOURCE_BYTES) throw new Error(`La ressource « ${resourcePath} » est trop volumineuse.`);
+        resourcesBytes += data.byteLength;
+        if (resourcesBytes > PLUGIN_MAX_RESOURCES_BYTES) throw new Error('Les ressources de l’extension dépassent 12 Mo.');
+        normalizedResources.push({ resourcePath, data });
+    }
 
     const target = pluginDir(manifest.id);
     if (fsSync.existsSync(target)) {
@@ -4261,6 +4333,14 @@ async function installPluginPackage() {
     await writeJson(path.join(target, 'manifest.json'), manifest);
     await fs.writeFile(path.join(target, 'plugin.js'), code, 'utf8');
     if (style.trim()) await fs.writeFile(path.join(target, 'style.css'), style, 'utf8');
+    if (normalizedResources.length) {
+        const resourcesDir = path.join(target, 'resources');
+        for (const resource of normalizedResources) {
+            const destination = path.join(resourcesDir, ...resource.resourcePath.split('/'));
+            await fs.mkdir(path.dirname(destination), { recursive: true });
+            await fs.writeFile(destination, resource.data);
+        }
+    }
 
     const registry = await loadPluginRegistry();
     registry.enabled[manifest.id] = true;
@@ -4329,6 +4409,107 @@ function requirePluginPermission(manifest, permission) {
     if (!manifest.permissions.includes(permission)) {
         throw new Error(`L’extension « ${manifest.name} » n’a pas la permission ${permission}.`);
     }
+}
+
+
+function encodeHtmlTextNode(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function decodePluginTextNode(value) {
+    return decodeHtmlEntities(String(value || ''))
+        .replace(/&#(\d+);/g, (_m, n) => {
+            const code = Number(n);
+            return Number.isFinite(code) ? String.fromCodePoint(code) : _m;
+        })
+        .replace(/&#x([0-9a-f]+);/gi, (_m, h) => {
+            const code = Number.parseInt(h, 16);
+            return Number.isFinite(code) ? String.fromCodePoint(code) : _m;
+        });
+}
+
+function normalizePluginContext(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function commonSuffixLength(a, b) {
+    const left = String(a || '');
+    const right = String(b || '');
+    let count = 0;
+    while (count < left.length && count < right.length && left[left.length - 1 - count] === right[right.length - 1 - count]) count += 1;
+    return count;
+}
+
+function commonPrefixLength(a, b) {
+    const left = String(a || '');
+    const right = String(b || '');
+    let count = 0;
+    while (count < left.length && count < right.length && left[count] === right[count]) count += 1;
+    return count;
+}
+
+function applyControlledTextCorrection(html, change = {}) {
+    const source = String(html || '<p></p>');
+    const target = String(change.target || '').normalize('NFC');
+    const replacement = String(change.replacement ?? '').normalize('NFC');
+    if (!target) throw new Error('Le passage à corriger est vide.');
+    if (target.length > 500 || replacement.length > 500) throw new Error('La correction proposée est trop longue.');
+
+    const tokens = source.match(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g) || [];
+    const textTokens = [];
+    let flat = '';
+    const blockTag = /^(?:<\/?(?:p|div|blockquote|h[1-6]|li|ul|ol)\b|<br\b)/i;
+
+    for (let i = 0; i < tokens.length; i += 1) {
+        const raw = tokens[i];
+        if (raw.startsWith('<')) {
+            if (blockTag.test(raw) && flat && !flat.endsWith('\n')) flat += '\n';
+            continue;
+        }
+        const decoded = decodePluginTextNode(raw).normalize('NFC');
+        const start = flat.length;
+        flat += decoded;
+        textTokens.push({ tokenIndex: i, decoded, flatStart: start });
+    }
+
+    const wantedStart = Number.isFinite(Number(change.start)) ? Number(change.start) : 0;
+    const wantedBefore = normalizePluginContext(change.before).slice(-80);
+    const wantedAfter = normalizePluginContext(change.after).slice(0, 90);
+    const candidates = [];
+
+    for (const entry of textTokens) {
+        let from = 0;
+        while (from <= entry.decoded.length) {
+            const local = entry.decoded.indexOf(target, from);
+            if (local < 0) break;
+            const globalStart = entry.flatStart + local;
+            const before = normalizePluginContext(flat.slice(Math.max(0, globalStart - 120), globalStart));
+            const after = normalizePluginContext(flat.slice(globalStart + target.length, globalStart + target.length + 130));
+            const contextScore = commonSuffixLength(before, wantedBefore) + commonPrefixLength(after, wantedAfter);
+            const distance = Math.abs(globalStart - wantedStart);
+            candidates.push({ ...entry, local, globalStart, contextScore, distance });
+            from = local + Math.max(1, target.length);
+        }
+    }
+
+    if (!candidates.length) {
+        throw new Error('Le passage signalé n’a pas été retrouvé dans le chapitre. Réanalysez le chapitre puis réessayez.');
+    }
+
+    candidates.sort((a, b) => b.contextScore - a.contextScore || a.distance - b.distance);
+    const best = candidates[0];
+    const second = candidates[1];
+    if (second && best.contextScore === second.contextScore && best.distance === second.distance) {
+        throw new Error('Cette correction est ambiguë dans le chapitre. Corrigez ce passage directement dans le manuscrit.');
+    }
+
+    const beforeText = best.decoded.slice(0, best.local);
+    const afterText = best.decoded.slice(best.local + target.length);
+    tokens[best.tokenIndex] = encodeHtmlTextNode(beforeText + replacement + afterText);
+    return tokens.join('');
 }
 
 async function pluginApiRequest(pluginId, method, params = {}) {
@@ -4401,6 +4582,60 @@ async function pluginApiRequest(pluginId, method, params = {}) {
             depth: Number(chapter._depth || 0),
             updatedAt: chapter.updatedAt || ''
         }));
+    }
+
+    if (action === 'chapters.applyCorrection') {
+        if (manifest.ecrivainApi < 3) throw new Error('Cette fonction nécessite l’API d’extensions 3.');
+        requirePluginPermission(manifest, 'chapters.write');
+        if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+        const id = String(params?.id || '').trim();
+        if (!id) throw new Error('Chapitre invalide.');
+        const file = path.join(currentProjectDir, 'chapters', `${id}.json`);
+        if (!fsSync.existsSync(file)) throw new Error('Chapitre introuvable.');
+        const chapter = await readJson(file);
+        const correctedHtml = applyControlledTextCorrection(chapter.content || '<p></p>', params?.change || {});
+        if (correctedHtml === String(chapter.content || '<p></p>')) {
+            return { applied: false, chapter };
+        }
+        const saved = await saveChapter({ ...chapter, content: correctedHtml }, { mode: 'manual' });
+        return {
+            applied: true,
+            chapter: saved,
+            previous: String(params?.change?.target || ''),
+            replacement: String(params?.change?.replacement ?? '')
+        };
+    }
+
+    if (action === 'resources.list') {
+        if (manifest.ecrivainApi < 2) throw new Error('Cette fonction nécessite l’API d’extensions 2.');
+        const root = path.join(pluginDir(manifest.id), 'resources');
+        if (!fsSync.existsSync(root)) return [];
+        const files = [];
+        async function walk(dir, prefix = '') {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+                if (entry.isDirectory()) await walk(path.join(dir, entry.name), relative);
+                else if (entry.isFile()) files.push(relative.replace(/\\/g, '/'));
+            }
+        }
+        await walk(root);
+        return files.sort((a, b) => a.localeCompare(b, 'fr'));
+    }
+
+    if (action === 'resources.text') {
+        if (manifest.ecrivainApi < 2) throw new Error('Cette fonction nécessite l’API d’extensions 2.');
+        const file = pluginResourceFile(manifest.id, params?.path);
+        if (!fsSync.existsSync(file)) throw new Error('Ressource d’extension introuvable.');
+        const stat = await fs.stat(file);
+        if (!stat.isFile() || stat.size > PLUGIN_MAX_RESOURCE_BYTES) throw new Error('Ressource d’extension invalide.');
+        return fs.readFile(file, 'utf8');
+    }
+
+    if (action === 'resources.json') {
+        if (manifest.ecrivainApi < 2) throw new Error('Cette fonction nécessite l’API d’extensions 2.');
+        const text = await pluginApiRequest(pluginId, 'resources.text', { path: params?.path });
+        try { return JSON.parse(text); } catch (_) { throw new Error('La ressource JSON de l’extension est invalide.'); }
     }
 
     if (action === 'storage.read') {
@@ -4650,12 +4885,84 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: true
+            sandbox: true,
+            spellcheck: true
         }
     });
 
     mainWindow.loadFile('index.html');
     mainWindow.webContents.setZoomFactor(loadPreferencesSync().uiZoom);
+    applySpellCheckerPreferences(loadPreferencesSync());
+
+    const spellSession = mainWindow.webContents.session;
+    spellSession.on('spellcheck-dictionary-download-begin', (_event, languageCode) => {
+        writeDiagnostic('INFO', 'Téléchargement du dictionnaire orthographique.', { language: languageCode });
+    });
+    spellSession.on('spellcheck-dictionary-initialized', (_event, languageCode) => {
+        writeDiagnostic('INFO', 'Dictionnaire orthographique prêt.', { language: languageCode });
+    });
+
+    // Menu contextuel natif : suggestions Hunspell pour les mots signalés,
+    // dictionnaire personnel, puis commandes d'édition familières.
+    mainWindow.webContents.on('context-menu', (_event, params) => {
+        const editable = Boolean(params.isEditable);
+        const hasSelection = Boolean(String(params.selectionText || '').length);
+        const misspelledWord = String(params.misspelledWord || '').trim();
+        if (!editable && !hasSelection) return;
+
+        const editFlags = params.editFlags || {};
+        const template = [];
+        const spellEnabled = mainWindow.webContents.session.isSpellCheckerEnabled();
+
+        if (editable && spellEnabled && misspelledWord) {
+            const suggestions = Array.isArray(params.dictionarySuggestions)
+                ? params.dictionarySuggestions.filter(Boolean).slice(0, 6)
+                : [];
+            if (suggestions.length) {
+                for (const suggestion of suggestions) {
+                    template.push({
+                        label: suggestion,
+                        click: () => mainWindow.webContents.replaceMisspelling(suggestion)
+                    });
+                }
+            } else {
+                template.push({ label: 'Aucune suggestion', enabled: false });
+            }
+            template.push({ type: 'separator' });
+            template.push({
+                label: `Ajouter « ${misspelledWord} » au dictionnaire`,
+                click: () => {
+                    const ok = mainWindow.webContents.session.addWordToSpellCheckerDictionary(misspelledWord);
+                    writeDiagnostic(ok ? 'INFO' : 'WARN', ok ? 'Mot ajouté au dictionnaire personnel.' : 'Ajout au dictionnaire personnel impossible.', { word: misspelledWord });
+                }
+            });
+            template.push({ type: 'separator' });
+        }
+
+        if (editable) {
+            template.push({
+                label: 'Couper',
+                role: 'cut',
+                enabled: hasSelection && Boolean(editFlags.canCut)
+            });
+        }
+        template.push({
+            label: 'Copier',
+            role: 'copy',
+            enabled: hasSelection && Boolean(editFlags.canCopy)
+        });
+        if (editable) {
+            template.push({
+                label: 'Coller',
+                role: 'paste',
+                enabled: Boolean(editFlags.canPaste)
+            });
+            template.push({ type: 'separator' });
+            template.push({ label: 'Tout sélectionner', role: 'selectAll' });
+        }
+
+        Menu.buildFromTemplate(template).popup({ window: mainWindow });
+    });
 
     // Raccourcis gérés directement par la fenêtre pour rester fiables,
     // y compris avec les claviers AZERTY et lorsque la barre de menus est masquée.

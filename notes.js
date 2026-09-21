@@ -29,6 +29,7 @@
         readerDelete: $('noteReaderDeleteBtn'),
         modalBackdrop: $('noteModalBackdrop'),
         modal: $('noteModalBackdrop')?.querySelector('.note-modal'),
+        modalClose: $('noteModalClose'),
         modalTitle: $('noteModalTitle'),
         modalBody: $('noteModalBody'),
         modalCancel: $('noteModalCancel'),
@@ -635,6 +636,9 @@
             document.addEventListener('keydown', keydown);
         });
     }
+
+    // Fermer par la croix revient à annuler la fenêtre en cours.
+    ui.modalClose?.addEventListener('click', () => ui.modalCancel?.click());
 
     ui.back.addEventListener('click', backToManuscript);
     ui.newText.addEventListener('click', newTextNote);

@@ -4,7 +4,7 @@
     const $ = (id) => document.getElementById(id);
     const view = $('preferencesView');
     const fields = {
-        startup: $('prefStartup'), recentLimit: $('prefRecentLimit'), projectsDir: $('prefProjectsDir'), autosave: $('prefAutosave'),
+        startup: $('prefStartup'), recentLimit: $('prefRecentLimit'), projectsDir: $('prefProjectsDir'), autosave: $('prefAutosave'), spellcheck: $('prefSpellcheck'),
         author: $('prefAuthor'), font: $('prefFont'), fontSize: $('prefFontSize'), lineSpacing: $('prefLineSpacing'),
         pageWidth: $('prefPageWidth'), pageHeight: $('prefPageHeight'), margin: $('prefMargin'), indent: $('prefIndent'), zoom: $('prefZoom')
     };
@@ -17,6 +17,7 @@
     const infoBody = $('settingsInfoBody');
     const infoLogo = $('settingsInfoLogo');
     const infoClose = $('settingsInfoClose');
+    const infoXClose = $('settingsInfoXClose');
     const infoSecondary = $('settingsInfoSecondary');
 
     function esc(value) {
@@ -42,6 +43,7 @@
         fields.recentLimit.value = String(p.recentProjectsLimit || 5);
         fields.projectsDir.value = p.defaultProjectsDir || '';
         fields.autosave.value = String(p.autosaveDelayMs || 1800);
+        if (fields.spellcheck) fields.spellcheck.value = p.spellcheckEnabled === false ? 'false' : 'true';
         fields.author.value = p.defaultAuthor || '';
         const preferredFont = p.newProjectFont || 'Garamond';
         if (fields.font && !Array.from(fields.font.options || []).some((option) => option.value === preferredFont)) {
@@ -71,6 +73,7 @@
             recentProjectsLimit: Number(fields.recentLimit.value),
             defaultProjectsDir: fields.projectsDir.value.trim(),
             autosaveDelayMs: Number(fields.autosave.value),
+            spellcheckEnabled: fields.spellcheck ? fields.spellcheck.value !== 'false' : true,
             defaultAuthor: fields.author.value.trim(),
             newProjectFont: fields.font.value.trim() || 'Garamond',
             newProjectFontSizePt: Number(fields.fontSize.value),
@@ -250,6 +253,7 @@
     $('prefChooseProjectsDir')?.addEventListener('click', async () => { const r = await window.ecrivain.preferences.pickProjectsDir(); if (!r?.canceled && r?.path) fields.projectsDir.value = r.path; });
     $('prefOpenData')?.addEventListener('click', () => window.ecrivain.appInfo.openDataFolder().catch(() => {}));
     $('prefOpenExtensions')?.addEventListener('click', async () => { try { await window.ecrivain.plugins.openFolder(); } catch (_) {} });
+    infoXClose?.addEventListener('click', closeOverlay);
     overlay?.addEventListener('mousedown', (e) => { if (e.target === overlay) closeOverlay(); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay && !overlay.hidden) closeOverlay(); });
 

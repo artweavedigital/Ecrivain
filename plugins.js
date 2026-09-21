@@ -16,6 +16,11 @@
         runtimeEmptyTitle: $('pluginRuntimeEmptyTitle'),
         runtimeEmptyText: $('pluginRuntimeEmptyText'),
         runtimeActions: $('pluginRuntimeActions'),
+        runtimeBack: $('pluginRuntimeBackBtn'),
+        safety: $('pluginsSafety'),
+        layout: $('pluginsLayout'),
+        listPanel: $('pluginsListPanel'),
+        runtimePanel: $('pluginsRuntimePanel'),
         frame: $('pluginRuntimeFrame'),
         editorArea: $('editorArea'),
         welcome: $('welcome'),
@@ -27,6 +32,7 @@
     const PERMISSIONS = {
         'project.read': 'Lire les informations du projet',
         'chapters.read': 'Lire les chapitres et leur contenu',
+        'chapters.write': 'Appliquer une correction validée au texte d’un chapitre',
         'storage.read': 'Lire ses propres données dans le projet',
         'storage.write': 'Enregistrer ses propres données dans le projet'
     };
@@ -83,31 +89,58 @@
         return state.payload?.plugins?.find((plugin) => plugin.id === pluginId) || null;
     }
 
+    function releaseRuntimeDocument() {
+        // Le document d’extension est autonome ; supprimer sa source suffit à l’arrêter.
+        ui.frame?.removeAttribute('srcdoc');
+        ui.frame?.removeAttribute('src');
+    }
+
+    function showManager() {
+        if (state.readyTimer) { window.clearTimeout(state.readyTimer); state.readyTimer = null; }
+        state.queuedCommand = '';
+        if (ui.safety) ui.safety.hidden = false;
+        if (ui.listPanel) ui.listPanel.hidden = false;
+        if (ui.runtimePanel) ui.runtimePanel.hidden = true;
+        ui.layout?.classList.remove('is-runtime');
+        ui.layout?.classList.add('is-manager');
+    }
+
+    function showRuntimeWorkspace(pluginId) {
+        const plugin = pluginById(pluginId);
+        if (!plugin) return;
+        if (ui.safety) ui.safety.hidden = true;
+        if (ui.listPanel) ui.listPanel.hidden = true;
+        if (ui.runtimePanel) ui.runtimePanel.hidden = false;
+        ui.layout?.classList.remove('is-manager');
+        ui.layout?.classList.add('is-runtime');
+        ui.runtimeTitle.textContent = plugin.name;
+        ui.runtimeSubtitle.textContent = 'Ouverture de l’extension…';
+        ui.runtimeEmpty.hidden = true;
+        ui.frame.hidden = false;
+    }
+
     function showReady(pluginId) {
         const plugin = pluginById(pluginId);
         if (!plugin) return clearRuntime();
-
         state.activePluginId = plugin.id;
         state.activeRuntime = null;
         state.queuedCommand = '';
         state.runtimeToken = '';
+        releaseRuntimeDocument();
         if (state.readyTimer) { window.clearTimeout(state.readyTimer); state.readyTimer = null; }
         ui.runtimeTitle.textContent = plugin.name;
         ui.runtimeSubtitle.textContent = plugin.enabled
-            ? 'Extension activée. Choisissez une action ci-dessous.'
-            : 'Extension désactivée. Activez-la pour utiliser ses actions.';
+            ? 'Choisissez une action.'
+            : 'Cette extension est désactivée.';
         ui.runtimeEmpty.hidden = false;
         ui.frame.hidden = true;
         ui.frame.removeAttribute('srcdoc');
+        ui.frame.removeAttribute('src');
 
-        if (ui.runtimeEmptyTitle) {
-            ui.runtimeEmptyTitle.textContent = plugin.enabled ? 'Extension prête' : 'Extension désactivée';
-        }
-        if (ui.runtimeEmptyText) {
-            ui.runtimeEmptyText.textContent = plugin.commands?.length
-                ? 'Cliquez sur une action pour lancer l’extension. « Activée » signifie seulement qu’elle est autorisée à fonctionner.'
-                : 'Cette extension ne déclare aucune action à lancer.';
-        }
+        if (ui.runtimeEmptyTitle) ui.runtimeEmptyTitle.textContent = plugin.enabled ? 'Prête à être ouverte' : 'Extension désactivée';
+        if (ui.runtimeEmptyText) ui.runtimeEmptyText.textContent = plugin.commands?.length
+            ? 'Ouvrez l’outil pour travailler dans une fenêtre dédiée.'
+            : 'Cette extension ne propose aucune action.';
         if (ui.runtimeActions) {
             ui.runtimeActions.innerHTML = '';
             for (const command of plugin.commands || []) {
@@ -130,17 +163,14 @@
 
         for (const plugin of plugins) {
             const card = document.createElement('article');
-            card.className = `plugin-card${plugin.enabled ? '' : ' is-disabled'}`;
+            card.className = `plugin-card plugin-card--simple${plugin.enabled ? '' : ' is-disabled'}`;
             card.dataset.pluginId = plugin.id;
-            card.addEventListener('click', () => showReady(plugin.id));
 
             const head = document.createElement('div');
             head.className = 'plugin-card__head';
-
             const icon = document.createElement('div');
             icon.className = 'plugin-card__icon';
             icon.textContent = plugin.icon || '🧩';
-
             const identity = document.createElement('div');
             identity.className = 'plugin-card__identity';
             const titleRow = document.createElement('div');
@@ -154,7 +184,6 @@
             const author = document.createElement('p');
             author.textContent = plugin.author ? `par ${plugin.author}` : 'Auteur non renseigné';
             identity.append(titleRow, author);
-
             const status = document.createElement('span');
             status.className = `plugin-status ${plugin.enabled ? 'is-enabled' : 'is-disabled'}`;
             status.textContent = plugin.enabled ? 'Activée' : 'Désactivée';
@@ -164,6 +193,26 @@
             description.className = 'plugin-card__description';
             description.textContent = plugin.description || 'Aucune description.';
 
+            const primary = document.createElement('div');
+            primary.className = 'plugin-primary-actions';
+            if (plugin.commands?.length) {
+                for (const command of plugin.commands) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'button button-primary plugin-open-button';
+                    button.textContent = plugin.commands.length === 1 ? 'Ouvrir' : command.label;
+                    button.disabled = !plugin.enabled;
+                    button.addEventListener('click', () => runCommand(plugin.id, command.id));
+                    primary.appendChild(button);
+                }
+            }
+
+            const details = document.createElement('details');
+            details.className = 'plugin-details';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Détails et permissions';
+            const detailsBody = document.createElement('div');
+            detailsBody.className = 'plugin-details__body';
             const permissions = document.createElement('div');
             permissions.className = 'plugin-permissions';
             if (!plugin.permissions?.length) {
@@ -179,48 +228,29 @@
                     permissions.appendChild(chip);
                 }
             }
-
-            const commands = document.createElement('div');
-            commands.className = 'plugin-commands';
-            if (plugin.commands?.length) {
-                for (const command of plugin.commands) {
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'button button-small plugin-command-button';
-                    button.textContent = command.label;
-                    button.disabled = !plugin.enabled;
-                    button.addEventListener('click', (event) => { event.stopPropagation(); runCommand(plugin.id, command.id); });
-                    commands.appendChild(button);
-                }
-            } else {
-                const noCommand = document.createElement('span');
-                noCommand.className = 'plugin-no-command';
-                noCommand.textContent = 'Aucune commande déclarée';
-                commands.appendChild(noCommand);
-            }
-
-            const actions = document.createElement('div');
-            actions.className = 'plugin-card__actions';
+            const secondary = document.createElement('div');
+            secondary.className = 'plugin-secondary-actions';
             const toggle = document.createElement('button');
             toggle.type = 'button';
             toggle.className = 'button button-small';
             toggle.textContent = plugin.enabled ? 'Désactiver' : 'Activer';
-            toggle.addEventListener('click', (event) => { event.stopPropagation(); togglePlugin(plugin); });
+            toggle.addEventListener('click', () => togglePlugin(plugin));
             const uninstall = document.createElement('button');
             uninstall.type = 'button';
             uninstall.className = 'button button-small plugin-uninstall';
             uninstall.textContent = 'Désinstaller';
-            uninstall.addEventListener('click', (event) => { event.stopPropagation(); uninstallPlugin(plugin); });
-            actions.append(toggle, uninstall);
-
+            uninstall.addEventListener('click', () => uninstallPlugin(plugin));
+            secondary.append(toggle, uninstall);
             if (plugin.hasProjectData) {
-                const dataHint = document.createElement('span');
+                const dataHint = document.createElement('p');
                 dataHint.className = 'plugin-data-hint';
-                dataHint.textContent = 'Données présentes dans ce projet';
-                actions.prepend(dataHint);
+                dataHint.textContent = 'Cette extension possède des données dans le projet courant.';
+                detailsBody.appendChild(dataHint);
             }
+            detailsBody.append(permissions, secondary);
+            details.append(summary, detailsBody);
 
-            card.append(head, description, permissions, commands, actions);
+            card.append(head, description, primary, details);
             ui.list.appendChild(card);
         }
     }
@@ -236,10 +266,7 @@
             hideOtherViews();
             ui.view.hidden = false;
             await refresh();
-            if (!state.activePluginId) {
-                const firstEnabled = state.payload?.plugins?.find((plugin) => plugin.enabled) || state.payload?.plugins?.[0];
-                if (firstEnabled) showReady(firstEnabled.id);
-            }
+            showManager();
         } catch (error) {
             toast(error.message || 'Impossible d’ouvrir les extensions.', true);
         }
@@ -252,9 +279,9 @@
             if (result?.state) state.payload = result.state;
             else await refresh();
             render();
+            showManager();
             const plugin = pluginById(result?.installed);
-            if (plugin) showReady(plugin.id);
-            toast(plugin ? `${plugin.name} est installée et prête à être utilisée.` : 'Extension installée.');
+            toast(plugin ? `${plugin.name} est installée. Cliquez sur « Ouvrir » pour l’utiliser.` : 'Extension installée.');
         } catch (error) {
             toast(error.message || 'Installation impossible.', true);
         }
@@ -264,9 +291,7 @@
         try {
             state.payload = await window.ecrivain.plugins.toggle(plugin.id, !plugin.enabled);
             render();
-            const updated = pluginById(plugin.id);
-            if (updated) showReady(updated.id);
-            else clearRuntime();
+            showManager();
             toast(`${plugin.name} ${plugin.enabled ? 'désactivée' : 'activée'}.`);
         } catch (error) {
             toast(error.message || 'Impossible de modifier l’extension.', true);
@@ -278,6 +303,7 @@
             state.payload = await window.ecrivain.plugins.uninstall(plugin.id);
             if (!pluginById(plugin.id)) clearRuntime();
             render();
+            showManager();
         } catch (error) {
             toast(error.message || 'Désinstallation impossible.', true);
         }
@@ -306,34 +332,24 @@
     }
 
     function runtimeDocument(runtime, runtimeToken) {
-        const code64 = textToBase64(runtime.code || '');
-        const style64 = textToBase64(runtime.style || '');
         const manifest = safeJson(runtime.manifest || {});
         const token = safeJson(runtimeToken || '');
-        return `<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'unsafe-eval'; connect-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
+        const baseStyle = `
 :root{color-scheme:light;font-family:Georgia,serif;color:#2e2924;background:#fbf8f2}
-*{box-sizing:border-box}body{margin:0;padding:20px;background:#fbf8f2;color:#2e2924;line-height:1.55}
-#plugin-root{min-height:100%}h1,h2,h3{color:#3f3329}button{font:inherit;border:1px solid #b89a75;background:#fffaf1;color:#49392d;border-radius:8px;padding:8px 12px;cursor:pointer}button:hover{background:#f5eadb}
-.plugin-error{padding:14px;border:1px solid #c77;background:#fff1f0;border-radius:9px;color:#7b2e2e;white-space:pre-wrap}
-.plugin-loading{padding:18px;border:1px dashed #c8b79f;border-radius:10px;color:#786a5c;background:#fffdfa}
-</style>
-</head>
-<body><main id="plugin-root"><div class="plugin-loading">Extension prête. Lancez une commande.</div></main>
-<script>
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;padding:0;background:#fbf8f2;color:#2e2924;line-height:1.55}
+#plugin-root{min-height:100%;height:100%}h1,h2,h3{color:#3f3329}button{font:inherit;border:1px solid #b89a75;background:#fffaf1;color:#49392d;border-radius:8px;padding:8px 12px;cursor:pointer}button:hover{background:#f5eadb}
+.plugin-error{margin:20px;padding:14px;border:1px solid #c77;background:#fff1f0;border-radius:9px;color:#7b2e2e;white-space:pre-wrap}
+.plugin-loading{margin:20px;padding:18px;border:1px dashed #c8b79f;border-radius:10px;color:#786a5c;background:#fffdfa}
+`;
+        const style64 = textToBase64(baseStyle + '\n' + String(runtime.style || ''));
+        const pluginCode = String(runtime.code || '');
+        const runtimeCode = `
+'use strict';
 const __manifest=${manifest};
 const __runtimeToken=${token};
-const __code64=${safeJson(code64)};
-const __style64=${safeJson(style64)};
 const __handlers=new Map();
 const __pending=new Map();
 let __counter=0;
-function __decode(value){const binary=atob(value||'');const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return new TextDecoder().decode(bytes)}
 function __post(message){parent.postMessage({source:'ecrivain-plugin',pluginId:__manifest.id,runtimeToken:__runtimeToken,...message},'*')}
 function request(method,params={}){return new Promise((resolve,reject)=>{const requestId='r'+(++__counter);__pending.set(requestId,{resolve,reject});__post({type:'api',requestId,method,params})})}
 const ecrivain={
@@ -341,7 +357,8 @@ const ecrivain={
  request,
  app:{version:()=>request('app.version')},
  project:{getCurrent:()=>request('project.getCurrent')},
- chapters:{list:()=>request('chapters.list'),get:(id)=>request('chapters.get',{id}),readAll:()=>request('chapters.readAll')},
+ chapters:{list:()=>request('chapters.list'),get:(id)=>request('chapters.get',{id}),readAll:()=>request('chapters.readAll'),applyCorrection:(id,change)=>request('chapters.applyCorrection',{id,change})},
+ resources:{list:()=>request('resources.list'),text:(path)=>request('resources.text',{path}),json:(path)=>request('resources.json',{path})},
  storage:{read:()=>request('storage.read'),write:(value)=>request('storage.write',{value})},
  notify:(message)=>__post({type:'notify',message:String(message||'')}),
  onCommand:(id,handler)=>{if(typeof handler==='function')__handlers.set(String(id),handler)}
@@ -360,10 +377,23 @@ window.addEventListener('message',async(event)=>{
  }
 });
 try{
- const style=__decode(__style64);if(style){const node=document.createElement('style');node.textContent=style;document.head.appendChild(node)}
- const code=__decode(__code64);new Function('ecrivain',code)(ecrivain);__post({type:'ready'});
+(()=>{
+${pluginCode}
+})();
+__post({type:'ready'});
 }catch(error){document.getElementById('plugin-root').innerHTML='<div class="plugin-error"></div>';document.querySelector('.plugin-error').textContent='Impossible de charger l’extension.\\n\\n'+(error?.message||String(error));__post({type:'error',message:error?.message||String(error)})}
-</script>
+`;
+        const script64 = textToBase64(runtimeCode);
+        return `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src data:; script-src data: blob:; connect-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="data:text/css;base64,${style64}">
+</head>
+<body><main id="plugin-root"><div class="plugin-loading">Chargement de l’extension…</div></main>
+<script src="data:text/javascript;base64,${script64}"></script>
 </body>
 </html>`;
     }
@@ -373,6 +403,7 @@ try{
         state.activeRuntime = null;
         state.queuedCommand = '';
         state.runtimeToken = '';
+        releaseRuntimeDocument();
         if (state.readyTimer) { window.clearTimeout(state.readyTimer); state.readyTimer = null; }
         ui.runtimeTitle.textContent = 'Aucune extension sélectionnée';
         ui.runtimeSubtitle.textContent = 'Sélectionnez une extension installée pour afficher ses actions.';
@@ -382,6 +413,7 @@ try{
         ui.runtimeEmpty.hidden = false;
         ui.frame.hidden = true;
         ui.frame.removeAttribute('srcdoc');
+        ui.frame.removeAttribute('src');
     }
 
     async function loadRuntime(pluginId, commandId) {
@@ -391,17 +423,28 @@ try{
         state.queuedCommand = commandId;
         state.runtimeToken = (globalThis.crypto?.randomUUID?.() || `rt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
         if (state.readyTimer) window.clearTimeout(state.readyTimer);
+        releaseRuntimeDocument();
+        showRuntimeWorkspace(pluginId);
         ui.runtimeTitle.textContent = runtime.manifest?.name || pluginId;
-        ui.runtimeSubtitle.textContent = 'Chargement de l’extension…';
+        ui.runtimeSubtitle.textContent = 'Chargement…';
         ui.runtimeEmpty.hidden = true;
         ui.frame.hidden = false;
+
+        // Le document srcdoc hérite de la politique de sécurité d’Écrivain.
+        // Le script et le style sont donc chargés comme ressources data: externes,
+        // autorisées explicitement, sans script inline ni eval dans l’hôte.
+        ui.frame.removeAttribute('src');
         ui.frame.srcdoc = runtimeDocument(runtime, state.runtimeToken);
+
         const expectedToken = state.runtimeToken;
         state.readyTimer = window.setTimeout(() => {
             if (state.runtimeToken !== expectedToken || !state.queuedCommand) return;
-            ui.runtimeSubtitle.textContent = 'L’extension ne répond pas. Réessayez ou réinstallez-la.';
-            toast('L’extension n’a pas terminé son chargement. Réessayez ou réinstallez-la.', true);
-        }, 5000);
+            ui.runtimeSubtitle.textContent = 'L’extension n’a pas démarré.';
+            ui.runtimeEmpty.hidden = false;
+            ui.runtimeEmptyTitle.textContent = 'Impossible d’ouvrir cette extension';
+            ui.runtimeEmptyText.textContent = 'Revenez à la liste puis réessayez. Si le problème persiste, le rapport de diagnostic indiquera l’erreur exacte.';
+            toast('L’extension n’a pas démarré. Consultez le diagnostic si le problème persiste.', true);
+        }, 12000);
     }
 
     async function runCommand(pluginId, commandId) {
@@ -414,6 +457,7 @@ try{
             }
             if (!pluginById(pluginId)?.enabled) throw new Error('Cette extension est désactivée.');
 
+            showRuntimeWorkspace(pluginId);
             if (state.activePluginId !== pluginId || !state.activeRuntime) {
                 await loadRuntime(pluginId, commandId);
                 return;
@@ -433,6 +477,8 @@ try{
         if (!state.runtimeToken || msg.runtimeToken !== state.runtimeToken) return;
 
         if (msg.type === 'ready') {
+            ui.runtimeEmpty.hidden = true;
+            ui.frame.hidden = false;
             if (state.readyTimer) { window.clearTimeout(state.readyTimer); state.readyTimer = null; }
             if (state.queuedCommand) {
                 const commandId = state.queuedCommand;
@@ -452,13 +498,22 @@ try{
         }
 
         if (msg.type === 'error') {
+            if (state.readyTimer) { window.clearTimeout(state.readyTimer); state.readyTimer = null; }
+            ui.runtimeSubtitle.textContent = 'Erreur dans l’extension.';
             toast(String(msg.message || 'Erreur de l’extension'), true);
             return;
         }
 
         if (msg.type === 'api') {
             try {
+                if (msg.method === 'chapters.applyCorrection') {
+                    const flushed = await window.ecrivainApp?.flushActiveChapter?.();
+                    if (flushed === false) throw new Error('Le chapitre en cours n’a pas pu être enregistré avant la correction.');
+                }
                 const value = await window.ecrivain.plugins.api(state.activePluginId, msg.method, msg.params || {});
+                if (msg.method === 'chapters.applyCorrection' && value?.chapter) {
+                    window.ecrivainApp?.syncChapter?.(value.chapter);
+                }
                 ui.frame.contentWindow?.postMessage({
                     source: 'ecrivain-host', pluginId: state.activePluginId, runtimeToken: state.runtimeToken, type: 'api-result',
                     requestId: msg.requestId, ok: true, value
@@ -474,11 +529,13 @@ try{
 
     function closeForSwitch() {
         ui.view.hidden = true;
+        if (state.readyTimer) { window.clearTimeout(state.readyTimer); state.readyTimer = null; }
     }
 
     ui.back?.addEventListener('click', backToManuscript);
     ui.install?.addEventListener('click', install);
     ui.openFolder?.addEventListener('click', openFolder);
+    ui.runtimeBack?.addEventListener('click', () => { clearRuntime(); showManager(); });
 
     window.ecrivainPlugins = { open, closeForSwitch, runCommand };
 })();

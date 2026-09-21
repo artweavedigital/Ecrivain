@@ -1,135 +1,145 @@
+<p align="center">
+  <img src="assets/branding/ecrivain-logo.png" alt="Écrivain" width="128">
+</p>
 
+<h1 align="center">Écrivain</h1>
+<p align="center"><strong>Écrire sans usine à gaz.</strong></p>
 
-# ✒️ Écrivain
+**Écrivain** est un atelier d’écriture local destiné à celles et ceux qui veulent
+écrire sans se perdre dans une interface complexe : chapitres à gauche, texte au
+centre, notes et outils narratifs à portée de souris.
 
-### Écrire sans usine à gaz.
+Le projet a été **initié par Pantélis Matsos**, d’abord sous forme de module pour
+Zwii. Il est aujourd’hui poursuivi par **Stéphane Matsos**, qui en définit l’usage,
+l’ergonomie et les besoins d’auteur, avec un développement technique assisté par
+intelligence artificielle.
 
-**Atelier d’écriture local, simple et complet pour romanciers, auteurs débutants et tous ceux qui veulent organiser leurs textes sans se perdre dans un logiciel complexe.**
+> À la mémoire de Pantélis Matsos, initiateur du projet Écrivain.
+>
+> **Next Horizon** est conservé comme nom historique du projet d’origine.
 
-![Version](https://img.shields.io/badge/version-0.6.0--beta-blue)
-![Plateforme](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)
-![Mode](https://img.shields.io/badge/fonctionnement-local%20%26%20hors%20ligne-success)
-![Statut](https://img.shields.io/badge/statut-b%C3%AAta-orange)
-![Code](https://img.shields.io/badge/code-source%20disponible-informational)
+## Version actuelle
 
-</div>
+**Écrivain 0.6.0 bêta — 0.6.0-beta.6**
+
+Cette bêta est destinée à être utilisée sur de vrais projets pendant plusieurs mois.
+La priorité n’est plus d’ajouter des fonctions, mais de vérifier la stabilité, le
+confort d’écriture et la fiabilité des exports sur la durée.
+
+## Ce qu’Écrivain fait déjà
+
+- chapitres et sous-chapitres, glisser-déposer, statuts et menu contextuel ;
+- éditeur riche avec typographie française, tirets cadratins, exposants et caractères invisibles ;
+- correcteur orthographique français Hunspell intégré : soulignement, suggestions au clic droit et dictionnaire personnalisé ;
+- synopsis global et synoptique ;
+- notes, documents, images et pièces jointes conservés avec le projet ;
+- chronologie et carte mentale ;
+- statistiques ;
+- recherche/remplacement dans le chapitre et dans tout le projet ;
+- historique avec comparaison de versions ;
+- cinq sauvegardes complètes du projet ;
+- vérification et récupération silencieuses ;
+- exports Markdown, DOCX, ODT, EPUB et PDF ;
+- assistant IA : Ollama, LM Studio, OpenAI, Anthropic et Mistral ;
+- système d’extensions installables hors ligne (API v2, compatible v1) ;
+- système d’extensions remanié avec espace de travail dédié ;
+- extension séparée **Correcteur français — Grammalecte 0.2.1**, basée sur le moteur local Grammalecte 2.3.0 ;
+- préférences, projets récents, plein écran, zoom et aide intégrée ;
+- journal technique et rapport de diagnostic pour la phase bêta.
+
+## Une application locale
+
+Les projets restent sur l’ordinateur de l’utilisateur. Écrivain fonctionne hors ligne
+pour l’écriture, les notes, l’organisation et les exports. Une connexion Internet
+n’est nécessaire que pour les services explicitement connectés, par exemple une IA
+distante.
+
+Les projets sont enregistrés en dehors du programme dans un format documenté :
+
+- format : `ecrivain-project` ;
+- version du format : `1` ;
+- schéma interne : `1.4.0`.
+
+Voir `FORMAT-PROJET.md`.
+
+## Vos œuvres vous appartiennent
+
+**Écrivain ne revendique aucun droit sur vos manuscrits, notes, images, documents ou
+autres contenus.** Vous restez libre de publier et de commercialiser les œuvres
+créées ou traitées avec le logiciel.
+
+## Licence du logiciel
+
+Le cœur d’Écrivain est distribué sous **Apache License 2.0 complétée par la Commons
+Clause v1.0**. Le code source est disponible pour étude, modification, contribution
+et redistribution selon ces conditions, mais Écrivain ou une copie dont la valeur
+repose essentiellement sur Écrivain ne peut pas être commercialisé sans autorisation.
+
+Le nom **Écrivain**, son emblème et son identité visuelle sont réservés.
+
+La documentation officielle est publiée séparément sous **CC BY-NC-ND 4.0**.
+
+Voir `LICENSE`, `NOTICE`, `TRADEMARKS.md` et `DOCUMENTATION-LICENSE.txt`.
+
+## Extensions
+
+Les extensions permettent d’ajouter des outils sans modifier le cœur d’Écrivain.
+Une extension tierce peut choisir sa propre licence. L’API v2 ajoute des ressources privées
+permettant d’embarquer proprement des moteurs JavaScript et leurs données tout en gardant
+le manuscrit protégé. La compatibilité avec l’API v1 est conservée.
+
+Une préversion de l’interface **Correcteur français — Grammalecte** est fournie dans
+`extensions-exemples/`. Elle permet déjà de tester l’ergonomie et une pré-analyse
+typographique locale. Le véritable moteur Grammalecte GPL n’est pas encore embarqué.
+
+Voir `EXTENSIONS.md`.
+
+## Démarrer en développement
+
+Prérequis : **Node.js 24 LTS**.
+
+```powershell
+npm.cmd install
+npm.cmd start
+```
+
+Sous Windows, `LANCER-ECRIVAIN.cmd` lance directement l’application lorsque les
+dépendances sont déjà présentes.
+
+## Construire la version Windows
+
+Le fichier `CONSTRUIRE-WINDOWS.cmd` :
+
+1. installe/vérifie les dépendances ;
+2. contrôle la syntaxe du projet ;
+3. fabrique l’application Windows x64 ;
+4. crée une archive portable ;
+5. crée `Ecrivain-Setup-0.6.0-beta.6.exe` si **Inno Setup 6** est installé.
+
+Les sorties sont placées dans `dist/`.
+
+Les scripts `CONSTRUIRE-LINUX.sh` et `CONSTRUIRE-MACOS.sh` préparent les bundles des
+autres plateformes. La distribution publique macOS devra ensuite être signée et
+notarisée sur macOS.
+
+## Bêta et diagnostic
+
+En cas de problème :
+
+**Aide → Informations techniques → Créer un rapport de diagnostic…**
+
+Le rapport ne contient ni le texte du manuscrit ni les clés API.
+
+Voir `BETA-TEST.md`, `KNOWN-ISSUES.md` et `DIAGNOSTIC.md`.
+
+## Contribuer
+
+Les corrections, améliorations ergonomiques et extensions sont bienvenues. Avant
+toute contribution au cœur du logiciel, lire `CONTRIBUTING.md`.
 
 ---
 
-## Pourquoi Écrivain ?
-
-Écrivain est né d’un besoin simple : **écrire et organiser un manuscrit sans avoir à lutter contre l’outil**.
-
-Un traitement de texte classique convient très bien pour la mise en page finale, mais devient vite moins pratique lorsqu’un projet comporte des dizaines de chapitres, des notes, des documents, une chronologie, des personnages, des recherches et plusieurs versions du texte.
-
-Écrivain rassemble ces éléments dans un même espace, tout en gardant une interface volontairement accessible.
-
-Il peut convenir aussi bien à un romancier qu’à un adolescent qui écrit sa première histoire, à quelqu’un qui prépare des souvenirs de famille, un recueil, des recettes ou tout autre projet organisé en chapitres.
-
-> **Le logiciel doit s’effacer devant l’écriture.**
-
----
-
-##  Principales fonctions
-
-### Écriture et organisation
-
-- chapitres et sous-chapitres ;
-- glisser-déposer pour réorganiser le manuscrit ;
-- transformation d’un chapitre en sous-chapitre et inversement ;
-- statuts : brouillon, en cours, à relire, finalisé, coupé ;
-- éditeur avec gras, italique, souligné et exposant ;
-- titres, citations et caractères typographiques français ;
-- sauvegarde automatique ;
-- historique par chapitre.
-
-### 🇫🇷 Typographie française
-
-Écrivain accorde une attention particulière aux conventions françaises :
-
-- apostrophes typographiques ;
-- guillemets français ;
-- espaces insécables ;
-- tirets cadratins pour les dialogues ;
-- ponctuation française ;
-- points de suspension ;
-- exposants typographiques ;
-- outil de normalisation du chapitre.
-
-Les caractères invisibles peuvent également être affichés pour repérer les espaces, espaces insécables, retours et fins de paragraphes.
-
-###  Outils pour le manuscrit
-
-- synopsis global ;
-- notes de projet et notes liées aux chapitres ;
-- pièces jointes et documentation ;
-- synoptique par cartes ;
-- chronologie ;
-- carte mentale ;
-- statistiques d’écriture ;
-- recherche et remplacement dans un chapitre ou dans tout le projet ;
-- sauvegardes complètes ;
-- restauration et récupération en cas d’incident.
-
-### 📤 Exports
-
-Écrivain exporte actuellement vers :
-
-- **DOCX**
-- **ODT**
-- **EPUB**
-- **PDF**
-- **Markdown**
-
-Les réglages du projet sont repris dans les exports compatibles : police, corps, interligne, marges, format de page, retrait de première ligne, justification et saut de page entre chapitres.
-
-L’objectif n’est pas de remplacer les outils spécialisés de mise en page : un export ODT ou DOCX peut être repris dans LibreOffice, Word ou Scribus pour les dernières finitions éditoriales.
-
-##  Assistant IA facultatif
-
-L’intelligence artificielle est **optionnelle** et ne modifie jamais directement le manuscrit.
-
-Écrivain peut fonctionner avec :
-
-- **Ollama** — local ;
-- **LM Studio** — local ;
-- **OpenAI** — clé API personnelle ;
-- **Anthropic** — clé API personnelle ;
-- **Mistral** — clé API personnelle.
-
-Exemples d’usages :
-
-- analyse éditoriale ;
-- répétitions et lourdeurs ;
-- cohérence ;
-- résumé ;
-- reformulation ;
-- question libre.
-
-### Un auteur peut donc utiliser Écrivain **entièrement hors ligne et sans IA**.
-
-###  Extensions
-
-Écrivain possède un système d’extensions destiné à permettre l’ajout de fonctions sans réécrire le cœur du logiciel.
-
-Les extensions peuvent notamment :
-
-- lire certaines informations du projet selon leurs permissions ;
-- proposer leurs propres outils ;
-- stocker leurs données dans le projet ;
-- fonctionner dans une interface isolée.
-
-L’API d’extensions reste volontairement restrictive : une extension ne reçoit pas un accès libre au système ni la possibilité de modifier directement le manuscrit.
-
----
-
-## Windows
-
-La première bêta publique cible Windows.
-
-Deux distributions sont prévues :
-
-### Installateurs pour Linux et Mac Os
-
-```text
-Ecrivain-Setup-0.6.0-beta.exe
+**Projet initié par Pantélis Matsos**  
+**Conception fonctionnelle et poursuite : Stéphane Matsos**  
+**Développement technique : assisté par intelligence artificielle**  
+**Next Horizon — projet historique**

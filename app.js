@@ -74,6 +74,7 @@ window.addEventListener('unhandledrejection', (event) => {
         zoomLabel: $('zoomLabel'),
         fullscreenExitBtn: $('fullscreenExitBtn'),
         modalBackdrop: $('modalBackdrop'),
+        modalClose: $('modalClose'),
         modalTitle: $('modalTitle'),
         modalBody: $('modalBody'),
         modalCancel: $('modalCancel'),
@@ -91,6 +92,11 @@ window.addEventListener('unhandledrejection', (event) => {
         done: 'Finalisé',
         cut: 'Coupé'
     };
+
+    // La croix d'une fenêtre modale a exactement le même comportement
+    // qu'« Annuler » : elle ferme proprement la fenêtre et déclenche les
+    // routines de nettoyage déjà en place pour chaque formulaire.
+    ui.modalClose?.addEventListener('click', () => ui.modalCancel?.click());
 
 
     const manuscriptFonts = [
@@ -474,8 +480,10 @@ window.addEventListener('unhandledrejection', (event) => {
             markSaved(auto);
             renderChapters();
             updateProjectIndicators();
+            return saved;
         } catch (error) {
             showToast(error.message || 'Impossible d’enregistrer le chapitre.', true);
+            return null;
         }
     }
 
@@ -1663,6 +1671,24 @@ window.addEventListener('unhandledrejection', (event) => {
         renderActiveChapter();
     }
 
+    function syncChapterFromExternal(chapter) {
+        if (!chapter?.id) return false;
+        const index = state.chapters.findIndex((item) => item.id === chapter.id);
+        if (index >= 0) state.chapters[index] = { ...state.chapters[index], ...chapter };
+        else state.chapters.push(chapter);
+        if (state.activeId === chapter.id) {
+            ui.chapterTitle.value = chapter.title || ui.chapterTitle.value || 'Sans titre';
+            ui.chapterStatus.value = normalizeStatus(chapter.status);
+            ui.chapterContent.innerHTML = chapter.content || '<p></p>';
+            markSaved(false);
+            applyDocumentSettings();
+        }
+        renderChapters();
+        updateProjectIndicators();
+        updateWordIndicators();
+        return true;
+    }
+
     window.ecrivainApp = {
         showManuscript: () => showManuscriptView(true),
         openChapter: (id) => openChapterFromFeature(id),
@@ -1670,6 +1696,12 @@ window.addEventListener('unhandledrejection', (event) => {
         updatePreferences: (prefs) => { state.preferences = { ...state.preferences, ...(prefs || {}) }; },
         loadProjectState: (payload) => setProjectState(payload),
         openRecentProject: (projectDir) => openRecentProject(projectDir),
+        flushActiveChapter: async () => {
+            if (!state.dirty) return true;
+            const saved = await saveActiveChapter(true);
+            return Boolean(saved);
+        },
+        syncChapter: (chapter) => syncChapterFromExternal(chapter),
         reloadProject: async (preferredChapterId = null) => {
             const payload = await window.ecrivain.project.state();
             if (!payload) return null;

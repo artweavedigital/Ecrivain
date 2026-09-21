@@ -2,7 +2,7 @@
 ; Généré pour Écrivain 0.6.0 bêta.
 #define MyAppName "Écrivain"
 #define MyAppExeName "Ecrivain.exe"
-#define MyAppVersion "0.6.0-beta.1"
+#define MyAppVersion "0.6.0-beta.6"
 #define MyAppPublisher "Stéphane Matsos"
 #define Root SourcePath + "..\..\"
 
@@ -16,7 +16,7 @@ DefaultGroupName=Écrivain
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#Root}dist\installer
-OutputBaseFilename=Ecrivain-Setup-0.6.0-beta
+OutputBaseFilename=Ecrivain-Setup-0.6.0-beta.6
 SetupIconFile={#Root}assets\branding\ecrivain.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2

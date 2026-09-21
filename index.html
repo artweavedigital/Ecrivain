@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-src 'self' data: blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' data:; script-src 'self' data: blob:; img-src 'self' data:; frame-src 'self' data: blob:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Écrivain</title>
     <link rel="stylesheet" href="vendor/vis-timeline.min.css">
@@ -905,7 +905,7 @@
                         <div>
                             <span class="feature-kicker">OUTILS</span>
                             <h2>Extensions</h2>
-                            <p>Ajoutez des outils à Écrivain sans modifier son noyau. Les extensions sont installées hors ligne depuis un fichier <strong>.ecrivain-plugin</strong>.</p>
+                            <p>Installez puis ouvrez un outil en un clic. Les extensions sont ajoutées hors ligne depuis un fichier <strong>.ecrivain-plugin</strong>.</p>
                         </div>
                         <div class="feature-head-actions">
                             <button id="pluginsOpenFolderBtn" type="button" class="button">Dossier des extensions</button>
@@ -914,16 +914,16 @@
                         </div>
                     </div>
 
-                    <div class="plugins-safety">
+                    <div id="pluginsSafety" class="plugins-safety">
                         <div class="plugins-safety__icon">🛡</div>
                         <div>
-                            <strong>Extensions isolées</strong>
-                            <p>Une extension ne reçoit que les permissions affichées ci-dessous. Son interface s’exécute dans un espace isolé, sans accès direct à vos fichiers ni au système Windows.</p>
+                            <strong>Extensions protégées</strong>
+                            <p>Écrivain limite automatiquement l’accès de chaque extension. Les permissions techniques restent consultables dans « Détails ».</p>
                         </div>
                     </div>
 
-                    <div class="plugins-layout">
-                        <section class="plugins-panel plugins-panel--list">
+                    <div id="pluginsLayout" class="plugins-layout">
+                        <section id="pluginsListPanel" class="plugins-panel plugins-panel--list">
                             <div class="plugins-panel-head">
                                 <div>
                                     <h3>Extensions installées</h3>
@@ -938,10 +938,11 @@
                             <div id="pluginsList" class="plugins-list"></div>
                         </section>
 
-                        <section class="plugins-panel plugins-panel--runtime">
+                        <section id="pluginsRuntimePanel" class="plugins-panel plugins-panel--runtime" hidden>
                             <div class="plugins-panel-head plugins-runtime-head">
-                                <div>
-                                    <span class="feature-kicker">UTILISATION DE L’EXTENSION</span>
+                                <button id="pluginRuntimeBackBtn" type="button" class="button button-small">← Extensions</button>
+                                <div class="plugins-runtime-identity">
+                                    <span class="feature-kicker">EXTENSION</span>
                                     <h3 id="pluginRuntimeTitle">Aucune extension sélectionnée</h3>
                                     <p id="pluginRuntimeSubtitle">Sélectionnez une extension installée pour afficher ses actions.</p>
                                 </div>
@@ -978,6 +979,8 @@
                         <section class="preference-card">
                             <div class="preference-card__head"><span class="preference-icon">✎</span><div><h3>Écriture</h3><p>Confort de travail et nouveaux projets.</p></div></div>
                             <label class="field"><span>Sauvegarde automatique après</span><select id="prefAutosave"><option value="1000">1 seconde d’inactivité</option><option value="1800">2 secondes d’inactivité</option><option value="3000">3 secondes d’inactivité</option><option value="5000">5 secondes d’inactivité</option><option value="10000">10 secondes d’inactivité</option></select></label>
+                            <label class="field"><span>Correcteur orthographique français</span><select id="prefSpellcheck"><option value="true">Activé — Hunspell</option><option value="false">Désactivé</option></select></label>
+                            <p class="preference-note">Les fautes sont soulignées pendant la frappe. Un clic droit sur un mot signalé propose des corrections et permet de l’ajouter au dictionnaire personnel. Le dictionnaire français peut nécessiter Internet lors de son tout premier chargement, puis il est conservé localement.</p>
                             <label class="field"><span>Auteur par défaut</span><input id="prefAuthor" type="text" placeholder="Nom utilisé lors d’un nouveau projet"></label>
                             <div class="preference-mini-grid preference-mini-grid--writing">
                                 <label class="field"><span>Police du manuscrit</span><select id="prefFont">
@@ -1051,6 +1054,7 @@
 
         <div id="modalBackdrop" class="modal-backdrop" hidden>
             <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+                <button id="modalClose" type="button" class="modal-close-button" title="Fermer" aria-label="Fermer">×</button>
                 <h2 id="modalTitle"></h2>
                 <div id="modalBody"></div>
                 <div class="modal-actions">
@@ -1062,6 +1066,7 @@
 
         <div id="noteModalBackdrop" class="modal-backdrop" hidden>
             <div class="modal modal--wide note-modal" role="dialog" aria-modal="true" aria-labelledby="noteModalTitle">
+                <button id="noteModalClose" type="button" class="modal-close-button" title="Fermer" aria-label="Fermer">×</button>
                 <h2 id="noteModalTitle">Note</h2>
                 <div id="noteModalBody"></div>
                 <div class="modal-actions">
@@ -1092,6 +1097,7 @@
 
         <div id="settingsInfoBackdrop" class="modal-backdrop" hidden>
             <div class="modal modal--wide settings-info-modal" role="dialog" aria-modal="true" aria-labelledby="settingsInfoTitle">
+                <button id="settingsInfoXClose" type="button" class="modal-close-button" title="Fermer" aria-label="Fermer">×</button>
                 <div class="settings-info-head">
                     <img id="settingsInfoLogo" src="assets/branding/ecrivain-logo.png" alt="" hidden>
                     <div><span id="settingsInfoKicker" class="feature-kicker">ÉCRIVAIN</span><h2 id="settingsInfoTitle"></h2><p id="settingsInfoSubtitle"></p></div>

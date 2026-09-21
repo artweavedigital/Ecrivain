@@ -18,16 +18,33 @@ function read(file, required = true) {
     return fs.readFileSync(target, 'utf8');
 }
 
+function collectResources(dir, prefix = '') {
+    const resources = {};
+    if (!fs.existsSync(dir)) return resources;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+        const absolute = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            Object.assign(resources, collectResources(absolute, relative));
+        } else if (entry.isFile()) {
+            resources[relative.replace(/\\/g, '/')] = fs.readFileSync(absolute).toString('base64');
+        }
+    }
+    return resources;
+}
+
 try {
     const manifest = JSON.parse(read('manifest.json'));
     const code = read('plugin.js');
     const style = read('style.css', false);
+    const resources = collectResources(path.join(sourceDir, 'resources'));
     const pkg = {
         format: 'ecrivain-plugin',
         packageVersion: 1,
         manifest,
         code,
-        style
+        style,
+        resources
     };
     const defaultName = `${manifest.id || path.basename(sourceDir)}.ecrivain-plugin`;
     const output = process.argv[3] ? path.resolve(process.argv[3]) : path.join(path.dirname(sourceDir), defaultName);

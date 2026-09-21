@@ -1,0 +1,9 @@
+Grammalecte 2.3.0
+Correcteur grammatical pour le français
+Auteur amont : Olivier R.
+Site : https://grammalecte.net/
+Licence amont : GNU GPL 3.0 ou ultérieure.
+
+Source utilisée pour cette intégration : extension Firefox officielle Grammalecte 2.3.0 (.xpi) fournie par l'utilisateur.
+
+Adaptation Écrivain : les fichiers JavaScript nécessaires au correcteur, au lexicographe, au conjugueur et au formateur typographique ont été concaténés sans minification dans grammalecte-engine.js. Les données de conjugaison, morphologie, phonétique et le dictionnaire français classique sont conservés comme ressources séparées.

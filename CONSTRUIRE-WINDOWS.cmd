@@ -40,9 +40,9 @@ call npm.cmd run package:win
 if errorlevel 1 goto :fail
 
 if not exist "dist" mkdir "dist"
-if exist "dist\Ecrivain-0.6.0-beta-portable.zip" del /q "dist\Ecrivain-0.6.0-beta-portable.zip"
+if exist "dist\Ecrivain-0.6.0-beta.6-portable.zip" del /q "dist\Ecrivain-0.6.0-beta.6-portable.zip"
 echo Creation de l'archive portable...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\Ecrivain-win32-x64\*' -DestinationPath 'dist\Ecrivain-0.6.0-beta-portable.zip' -CompressionLevel Optimal"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\Ecrivain-win32-x64\*' -DestinationPath 'dist\Ecrivain-0.6.0-beta.6-portable.zip' -CompressionLevel Optimal"
 
 echo.
 echo [4/4] Recherche d'Inno Setup pour creer l'installateur...
@@ -59,7 +59,7 @@ if defined ISCC (
 ) else (
   echo.
   echo Inno Setup 6 n'est pas installe : l'application portable est quand meme prete.
-  echo Pour generer Ecrivain-Setup-0.6.0-beta.exe, installez Inno Setup 6,
+  echo Pour generer Ecrivain-Setup-0.6.0-beta.6.exe, installez Inno Setup 6,
   echo puis relancez CONSTRUIRE-WINDOWS.cmd.
 )
 
@@ -69,8 +69,8 @@ echo   CONSTRUCTION TERMINEE
 echo ============================================================
 echo.
 echo Application : dist\Ecrivain-win32-x64\Ecrivain.exe
-echo Portable    : dist\Ecrivain-0.6.0-beta-portable.zip
-if exist "dist\installer\Ecrivain-Setup-0.6.0-beta.exe" echo Installateur : dist\installer\Ecrivain-Setup-0.6.0-beta.exe
+echo Portable    : dist\Ecrivain-0.6.0-beta.6-portable.zip
+if exist "dist\installer\Ecrivain-Setup-0.6.0-beta.6.exe" echo Installateur : dist\installer\Ecrivain-Setup-0.6.0-beta.6.exe
 echo.
 pause
 exit /b 0

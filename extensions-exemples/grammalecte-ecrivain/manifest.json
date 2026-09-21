@@ -1,0 +1,22 @@
+{
+  "id": "grammalecte-fr",
+  "name": "Correcteur français — Grammalecte",
+  "version": "0.3.0",
+  "author": "Grammalecte : Olivier R. — intégration Écrivain",
+  "description": "Correcteur grammatical français local avec corrections contrôlées, lexicographe, conjugueur et formateur typographique, basé sur Grammalecte 2.3.0.",
+  "icon": "G",
+  "ecrivainApi": 3,
+  "permissions": [
+    "project.read",
+    "chapters.read",
+    "chapters.write",
+    "storage.read",
+    "storage.write"
+  ],
+  "commands": [
+    {
+      "id": "ouvrir",
+      "label": "Ouvrir le correcteur français"
+    }
+  ]
+}

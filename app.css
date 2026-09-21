@@ -203,8 +203,28 @@ button { cursor: pointer; }
 .button-primary:hover { background: var(--accent-2); }
 
 .modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(27,25,23,.42); z-index: 100; }
-.modal { width: min(460px, calc(100vw - 40px)); background: #fffdf9; border: 1px solid #d9d0c4; border-radius: 10px; box-shadow: 0 20px 70px rgba(0,0,0,.25); padding: 20px; }
+.modal { position: relative; width: min(460px, calc(100vw - 40px)); background: #fffdf9; border: 1px solid #d9d0c4; border-radius: 10px; box-shadow: 0 20px 70px rgba(0,0,0,.25); padding: 20px; }
 .modal h2 { margin: 0 0 16px; font-family: Georgia, serif; font-size: 21px; }
+.modal-close-button {
+    position: absolute;
+    top: 9px;
+    right: 10px;
+    z-index: 8;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #71675f;
+    font: 400 25px/1 "Segoe UI", Arial, sans-serif;
+    cursor: pointer;
+}
+.modal-close-button:hover { background: #eee6dd; color: #3d3732; }
+.modal-close-button:focus-visible { outline: 2px solid #9d7c67; outline-offset: 1px; }
+.modal > h2, .settings-info-head { padding-right: 38px; }
+
 .modal-field { margin: 11px 0; }
 .modal-field label { display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted); font-weight: 600; }
 .modal-field input, .modal-field select { width: 100%; border: 1px solid #d7cec1; border-radius: 6px; padding: 8px 10px; outline: none; background:#fff; color:inherit; font:inherit; }
@@ -4088,3 +4108,128 @@ body.is-fullscreen .projectbar { padding-right:210px; }
 @media (max-width: 760px) {
     .about-origin { grid-template-columns: 1fr; }
 }
+
+/* =========================================================
+   EXTENSIONS — ergonomie simplifiée v0.6.0-beta.6
+   Une liste claire, puis l'extension en plein espace de travail.
+   ========================================================= */
+.plugins-layout.is-manager,
+.plugins-layout.is-runtime {
+    grid-template-columns: minmax(0, 1fr);
+}
+.plugins-layout.is-manager .plugins-panel--list,
+.plugins-layout.is-runtime .plugins-panel--runtime {
+    width: 100%;
+}
+.plugins-layout.is-runtime {
+    padding-top: 0;
+}
+.plugins-layout.is-runtime .plugins-panel--runtime {
+    min-height: 0;
+}
+.plugins-panel--list {
+    max-width: 1120px;
+    width: 100%;
+    margin: 0 auto;
+}
+.plugins-list {
+    padding: 16px;
+}
+.plugin-card--simple {
+    padding: 16px;
+    margin-bottom: 12px;
+    cursor: default;
+}
+.plugin-card--simple:hover {
+    background: #fffdf9;
+    border-color: #d8c8b5;
+}
+.plugin-card--simple .plugin-card__description {
+    max-width: 820px;
+    margin: 12px 0 14px;
+    font-size: 12.5px;
+}
+.plugin-primary-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 2px 0 12px;
+}
+.plugin-open-button {
+    min-width: 120px;
+    padding-inline: 18px;
+}
+.plugin-details {
+    border-top: 1px solid #ece4d8;
+    padding-top: 10px;
+    color: #6e6258;
+}
+.plugin-details > summary {
+    width: fit-content;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    font-weight: 700;
+    color: #6c5a49;
+}
+.plugin-details > summary:hover { color: #3f3329; }
+.plugin-details__body {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 9px;
+    background: #faf6ef;
+}
+.plugin-details__body .plugin-permissions { margin-bottom: 10px; }
+.plugin-secondary-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+.plugin-details__body .plugin-data-hint {
+    margin: 0 0 8px;
+}
+.plugins-runtime-head {
+    min-height: 70px;
+    align-items: center;
+    justify-content: flex-start;
+}
+.plugins-runtime-identity {
+    min-width: 0;
+}
+.plugins-runtime-identity h3 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.plugins-panel--runtime {
+    min-height: 0;
+    height: 100%;
+    background: #fbf8f2;
+}
+.plugin-runtime-frame {
+    min-height: 520px;
+}
+.plugins-safety {
+    max-width: 1120px;
+    width: calc(100% - 40px);
+    margin-left: auto;
+    margin-right: auto;
+    padding-block: 9px;
+}
+.plugins-safety__icon {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+    font-size: 14px;
+}
+.plugins-safety p { font-size: 11px; }
+@media (max-width: 820px) {
+    .plugin-card__head { grid-template-columns: 38px minmax(0,1fr); }
+    .plugin-card__head .plugin-status { grid-column: 2; justify-self: start; }
+    .plugins-runtime-head { align-items: flex-start; }
+}
+
+/* v0.6.0-beta.6 — centrage de l’espace extension */
+.plugins-layout.is-runtime .plugins-panel--runtime { max-width: 1320px; width: 100%; margin: 0 auto; }
+.plugins-runtime-head { padding-left: 18px; padding-right: 18px; }
