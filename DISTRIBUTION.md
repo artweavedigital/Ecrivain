@@ -16,9 +16,9 @@ Résultats attendus :
 dist/
 ├── Ecrivain-win32-x64/
 │   └── Ecrivain.exe
-├── Ecrivain-0.6.0-beta.6-portable.zip
+├── Ecrivain-0.6.0-beta.10-portable.zip
 └── installer/
-    └── Ecrivain-Setup-0.6.0-beta.6.exe
+    └── Ecrivain-Setup-0.6.0-beta.10.exe
 ```
 
 La création de l’installateur `.exe` nécessite Inno Setup 6. Sans Inno Setup, la

@@ -2,7 +2,8 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' data:; script-src 'self' data: blob:; img-src 'self' data:; frame-src 'self' data: blob:;">
+    <!-- Les chapitres conservent volontairement des styles inline de mise en forme (couleurs, surlignage, police, etc.). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' data:; script-src 'self' data: blob:; img-src 'self' data:; frame-src 'self' data: blob:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Écrivain</title>
     <link rel="stylesheet" href="vendor/vis-timeline.min.css">
@@ -136,6 +137,10 @@
                             <span id="chapterSearchCount" class="chapter-search-count">0 / 0</span>
                             <label class="chapter-search-check"><input id="chapterSearchCase" type="checkbox"> Respecter la casse</label>
                             <label class="chapter-search-check"><input id="chapterSearchWholeWord" type="checkbox"> Mot entier</label>
+                            <button id="chapterSearchAll" type="button" class="button chapter-search-action">Tout rechercher</button>
+                            <button id="chapterSearchFormatBtn" type="button" class="button chapter-search-format-btn">Format…</button>
+                            <button id="chapterSearchClearFormatBtn" type="button" class="button chapter-search-clear-format" hidden>Aucun format</button>
+                            <span id="chapterSearchFormatSummary" class="search-format-summary" hidden></span>
                             <button id="chapterSearchClose" type="button" class="chapter-search-close" title="Fermer" aria-label="Fermer">×</button>
                         </div>
                         <div id="chapterReplaceRow" class="chapter-replace-row" hidden>
@@ -145,6 +150,9 @@
                             </label>
                             <button id="chapterReplaceOne" type="button" class="button">Remplacer</button>
                             <button id="chapterReplaceAll" type="button" class="button button-primary">Remplacer tout</button>
+                            <button id="chapterReplaceFormatBtn" type="button" class="button chapter-search-format-btn">Format…</button>
+                            <button id="chapterReplaceClearFormatBtn" type="button" class="button chapter-search-clear-format" hidden>Aucun format</button>
+                            <span id="chapterReplaceFormatSummary" class="search-format-summary" hidden></span>
                             <span class="chapter-replace-scope">Chapitre en cours uniquement</span>
                         </div>
                     </div>
@@ -606,6 +614,14 @@
                         <div class="project-search-options">
                             <label><input id="projectSearchCase" type="checkbox"> Respecter la casse</label>
                             <label><input id="projectSearchWholeWord" type="checkbox"> Mot entier</label>
+                            <button id="projectSearchFormatBtn" type="button" class="button">Format de recherche…</button>
+                            <button id="projectSearchClearFormatBtn" type="button" class="button" hidden>Aucun format</button>
+                            <span id="projectSearchFormatSummary" class="search-format-summary" hidden></span>
+                            <span id="projectReplaceFormatControls" class="project-replace-format-controls" hidden>
+                                <button id="projectReplaceFormatBtn" type="button" class="button">Format de remplacement…</button>
+                                <button id="projectReplaceClearFormatBtn" type="button" class="button" hidden>Aucun format</button>
+                                <span id="projectReplaceFormatSummary" class="search-format-summary" hidden></span>
+                            </span>
                         </div>
                         <button id="projectSearchRunBtn" type="button" class="button button-primary">Rechercher</button>
                     </div>
@@ -1106,6 +1122,123 @@
                 <div class="modal-actions">
                     <button id="settingsInfoSecondary" class="button" hidden></button>
                     <button id="settingsInfoClose" class="button button-primary">Fermer</button>
+                </div>
+            </div>
+        </div>
+
+
+
+        <div id="searchFormatBackdrop" class="modal-backdrop search-format-backdrop" hidden>
+            <div class="search-format-dialog" role="dialog" aria-modal="true" aria-labelledby="searchFormatTitle">
+                <button id="searchFormatClose" type="button" class="modal-close-button" title="Fermer" aria-label="Fermer">×</button>
+                <div class="search-format-heading">
+                    <div>
+                        <span class="feature-kicker">RECHERCHER / REMPLACER</span>
+                        <h2 id="searchFormatTitle">Format</h2>
+                        <p id="searchFormatIntro">Laissez un réglage sur « Indifférent » pour ne pas l’utiliser comme critère.</p>
+                    </div>
+                </div>
+                <div class="search-format-layout">
+                    <nav class="search-format-tabs" aria-label="Catégories de format">
+                        <button type="button" class="is-active" data-format-tab="font">Police</button>
+                        <button type="button" data-format-tab="effects">Effets de caractère</button>
+                        <button type="button" data-format-tab="position">Position</button>
+                        <button type="button" data-format-tab="highlight">Mise en évidence</button>
+                    </nav>
+                    <div class="search-format-panels">
+                        <section class="search-format-panel is-active" data-format-panel="font">
+                            <div class="search-format-grid">
+                                <label class="field search-format-field search-format-field--wide">
+                                    <span>Police</span>
+                                    <input id="searchFormatFontFamily" type="text" list="searchFormatFontList" autocomplete="off" placeholder="Indifférent">
+                                    <datalist id="searchFormatFontList">
+                                        <option value="Garamond"></option>
+                                        <option value="EB Garamond"></option>
+                                        <option value="Georgia"></option>
+                                        <option value="Palatino Linotype"></option>
+                                        <option value="Book Antiqua"></option>
+                                        <option value="Times New Roman"></option>
+                                        <option value="Cambria"></option>
+                                        <option value="Constantia"></option>
+                                        <option value="Calibri"></option>
+                                        <option value="Arial"></option>
+                                    </datalist>
+                                </label>
+                                <label class="field search-format-field">
+                                    <span>Style</span>
+                                    <select id="searchFormatFontStyle">
+                                        <option value="">Indifférent</option>
+                                        <option value="normal">Normal</option>
+                                        <option value="bold">Gras</option>
+                                        <option value="italic">Italique</option>
+                                        <option value="bold-italic">Gras italique</option>
+                                    </select>
+                                </label>
+                                <label class="field search-format-field">
+                                    <span>Taille</span>
+                                    <div class="search-format-unit"><input id="searchFormatFontSize" type="number" min="5" max="96" step="0.5" placeholder="—"><span>pt</span></div>
+                                </label>
+                            </div>
+                            <div id="searchFormatPreview" class="search-format-preview">Aa — Écrivain</div>
+                        </section>
+
+                        <section class="search-format-panel" data-format-panel="effects">
+                            <div class="search-format-grid">
+                                <label class="field search-format-field">
+                                    <span>Soulignement</span>
+                                    <select id="searchFormatUnderline">
+                                        <option value="">Indifférent</option>
+                                        <option value="yes">Oui</option>
+                                        <option value="no">Non</option>
+                                    </select>
+                                </label>
+                                <label class="field search-format-field">
+                                    <span>Barré</span>
+                                    <select id="searchFormatStrike">
+                                        <option value="">Indifférent</option>
+                                        <option value="yes">Oui</option>
+                                        <option value="no">Non</option>
+                                    </select>
+                                </label>
+                                <label class="search-format-color-row">
+                                    <input id="searchFormatUseColor" type="checkbox">
+                                    <span>Couleur du texte</span>
+                                    <input id="searchFormatColor" type="color" value="#000000" aria-label="Couleur du texte">
+                                </label>
+                            </div>
+                        </section>
+
+                        <section class="search-format-panel" data-format-panel="position">
+                            <div class="search-format-grid">
+                                <label class="field search-format-field">
+                                    <span>Position</span>
+                                    <select id="searchFormatPosition">
+                                        <option value="">Indifférent</option>
+                                        <option value="normal">Normale</option>
+                                        <option value="super">Exposant</option>
+                                        <option value="sub">Indice</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <p class="search-format-help">La position peut être recherchée ou appliquée au texte remplacé.</p>
+                        </section>
+
+                        <section class="search-format-panel" data-format-panel="highlight">
+                            <label class="search-format-color-row search-format-color-row--wide">
+                                <input id="searchFormatUseBackground" type="checkbox">
+                                <span>Couleur de surlignage</span>
+                                <input id="searchFormatBackground" type="color" value="#fff59d" aria-label="Couleur de surlignage">
+                            </label>
+                            <p class="search-format-help">Le surlignage est conservé dans le projet et dans les exports qui prennent en charge cette mise en forme.</p>
+                        </section>
+                    </div>
+                </div>
+                <div class="search-format-footer">
+                    <button id="searchFormatReset" type="button" class="button">Aucun format</button>
+                    <div>
+                        <button id="searchFormatCancel" type="button" class="button">Annuler</button>
+                        <button id="searchFormatApply" type="button" class="button button-primary">Valider</button>
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,6 +1,6 @@
 {
   "name": "ecrivain",
-  "version": "0.6.0-beta.6",
+  "version": "0.6.0-beta.10",
   "description": "Écrivain — atelier d’écriture local, simple et extensible pour auteurs francophones",
   "main": "main.js",
   "scripts": {

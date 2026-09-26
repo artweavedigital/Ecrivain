@@ -20,7 +20,7 @@ intelligence artificielle.
 
 ## Version actuelle
 
-**Écrivain 0.6.0 bêta — 0.6.0-beta.6**
+**Écrivain 0.6.0 bêta — 0.6.0-beta.10**
 
 Cette bêta est destinée à être utilisée sur de vrais projets pendant plusieurs mois.
 La priorité n’est plus d’ajouter des fonctions, mais de vérifier la stabilité, le
@@ -114,7 +114,7 @@ Le fichier `CONSTRUIRE-WINDOWS.cmd` :
 2. contrôle la syntaxe du projet ;
 3. fabrique l’application Windows x64 ;
 4. crée une archive portable ;
-5. crée `Ecrivain-Setup-0.6.0-beta.6.exe` si **Inno Setup 6** est installé.
+5. crée `Ecrivain-Setup-0.6.0-beta.10.exe` si **Inno Setup 6** est installé.
 
 Les sorties sont placées dans `dist/`.
 

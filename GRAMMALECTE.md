@@ -1,6 +1,6 @@
 # Grammalecte dans Écrivain
 
-Écrivain 0.6.0-beta.6 utilise l’API d’extensions v3 pour permettre au correcteur Grammalecte d’appliquer une correction **uniquement après validation explicite de l’auteur**.
+Écrivain 0.6.0-beta.10 utilise l’API d’extensions v3 pour permettre au correcteur Grammalecte d’appliquer une correction **uniquement après validation explicite de l’auteur**.
 
 ## Installation
 

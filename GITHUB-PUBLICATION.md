@@ -36,8 +36,8 @@ Créer ensuite une release GitHub intitulée :
 
 Joindre au minimum :
 
-- `Ecrivain-Setup-0.6.0-beta.6.exe` ;
-- `Ecrivain-0.6.0-beta.6-portable.zip` ;
+- `Ecrivain-Setup-0.6.0-beta.10.exe` ;
+- `Ecrivain-0.6.0-beta.10-portable.zip` ;
 - l’archive du code source créée automatiquement par GitHub.
 
 La release doit être indiquée comme **préversion / bêta**.

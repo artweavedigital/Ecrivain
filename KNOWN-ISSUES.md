@@ -1,4 +1,4 @@
-# Points connus — Écrivain 0.6.0 bêta.6
+# Points connus — Écrivain 0.6.0 bêta.10
 
 Cette version est destinée aux essais grandeur nature.
 

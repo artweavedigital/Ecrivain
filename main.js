@@ -9,7 +9,7 @@ let currentProjectDir = null;
 const PROJECT_FORMAT_ID = 'ecrivain-project';
 const PROJECT_FORMAT_VERSION = 1;
 const PROJECT_SCHEMA_VERSION = '1.4.0';
-const APP_VERSION = '0.6.0-beta.6';
+const APP_VERSION = '0.6.0-beta.10';
 const MAX_RECENT_PROJECTS = 5;
 
 // Identité de l'application et verrou d'instance unique.
@@ -1853,10 +1853,18 @@ function markdownRuns(runs) {
             // Seuls les <br> explicites, représentés par \n dans un run,
             // deviennent des sauts de ligne Markdown.
             .replace(/\n/g, '  \n');
+        if (run.strike) text = `<s>${text}</s>`;
         if (run.underline) text = `<u>${text}</u>`;
         if (run.superscript) text = `<sup>${text}</sup>`;
+        if (run.subscript) text = `<sub>${text}</sub>`;
         if (run.italic) text = `*${text}*`;
         if (run.bold) text = `**${text}**`;
+        const css = [];
+        if (run.fontFamily) css.push(`font-family:${String(run.fontFamily).replace(/[;<>]/g, '')}`);
+        if (run.fontSizePt !== null && run.fontSizePt !== undefined && run.fontSizePt !== '' && Number.isFinite(Number(run.fontSizePt))) css.push(`font-size:${Number(run.fontSizePt)}pt`);
+        if (run.color) css.push(`color:${cssColorToHex(run.color)}`);
+        if (run.backgroundColor) css.push(`background-color:${cssColorToHex(run.backgroundColor)}`);
+        if (css.length) text = `<span style="${htmlEscape(css.join(';'))}">${text}</span>`;
         return text;
     }).join('');
 }
@@ -1952,6 +1960,246 @@ function htmlEscape(value) {
         .replace(/"/g, '&quot;');
 }
 
+
+function inlineFormatBase(overrides = {}) {
+    return {
+        fontFamily: null,
+        fontSizePt: null,
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+        position: 'normal',
+        color: null,
+        backgroundColor: null,
+        ...overrides
+    };
+}
+
+function normalizeCssFontFamily(value) {
+    const first = String(value || '').split(',')[0].trim();
+    return first.replace(/^['"]|['"]$/g, '').trim();
+}
+
+function cssColorToHex(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text || text === 'transparent' || text === 'rgba(0, 0, 0, 0)') return null;
+    if (/^#[0-9a-f]{6}$/i.test(text)) return text.toLowerCase();
+    if (/^#[0-9a-f]{3}$/i.test(text)) {
+        return `#${text.slice(1).split('').map((c) => c + c).join('')}`.toLowerCase();
+    }
+    const rgb = text.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*([\d.]+))?\s*\)$/);
+    if (rgb) {
+        if (rgb[4] !== undefined && Number(rgb[4]) === 0) return null;
+        return `#${[rgb[1], rgb[2], rgb[3]].map((n) => Math.max(0, Math.min(255, Math.round(Number(n)))).toString(16).padStart(2, '0')).join('')}`;
+    }
+    const names = {
+        black: '#000000', white: '#ffffff', red: '#ff0000', green: '#008000', blue: '#0000ff',
+        yellow: '#ffff00', gray: '#808080', grey: '#808080', orange: '#ffa500', purple: '#800080',
+        brown: '#a52a2a', pink: '#ffc0cb'
+    };
+    return names[text] || text;
+}
+
+function parseCssSizePt(value, currentPt = null) {
+    const text = String(value || '').trim().toLowerCase();
+    const n = Number.parseFloat(text);
+    if (!Number.isFinite(n)) return null;
+    if (text.endsWith('pt')) return n;
+    if (text.endsWith('px')) return n * 72 / 96;
+    if (text.endsWith('em') && Number.isFinite(currentPt)) return n * currentPt;
+    if (text.endsWith('rem')) return n * 12;
+    if (/^\d+(?:\.\d+)?$/.test(text)) return n;
+    return null;
+}
+
+function parseStyleDeclarations(styleText) {
+    const result = {};
+    for (const piece of String(styleText || '').split(';')) {
+        const colon = piece.indexOf(':');
+        if (colon < 0) continue;
+        const key = piece.slice(0, colon).trim().toLowerCase();
+        const value = piece.slice(colon + 1).trim();
+        if (key) result[key] = value;
+    }
+    return result;
+}
+
+function htmlTagInfo(token) {
+    const raw = String(token || '');
+    const closing = /^<\s*\//.test(raw);
+    const nameMatch = raw.match(/^<\s*\/?\s*([a-zA-Z0-9]+)/);
+    const name = nameMatch ? nameMatch[1].toLowerCase() : '';
+    const selfClosing = /\/\s*>$/.test(raw) || ['br', 'hr', 'img', 'input', 'meta', 'link', 'source', 'wbr'].includes(name);
+    const attrs = {};
+    if (!closing) {
+        const attrPart = raw.replace(/^<\s*[a-zA-Z0-9]+/, '').replace(/\/?>\s*$/, '');
+        const re = /([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+        let match;
+        while ((match = re.exec(attrPart)) !== null) attrs[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? '';
+    }
+    return { raw, closing, name, selfClosing, attrs };
+}
+
+function applyTagInlineFormat(base, info) {
+    const next = inlineFormatBase(base);
+    const name = info?.name || '';
+    if (['strong', 'b'].includes(name)) next.bold = true;
+    if (['em', 'i'].includes(name)) next.italic = true;
+    if (name === 'u') next.underline = true;
+    if (['s', 'strike', 'del'].includes(name)) next.strike = true;
+    if (name === 'sup') next.position = 'super';
+    if (name === 'sub') next.position = 'sub';
+    if (name === 'blockquote') next.italic = true;
+    if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(name)) next.bold = true;
+
+    if (name === 'font') {
+        if (info.attrs.face) next.fontFamily = normalizeCssFontFamily(info.attrs.face) || next.fontFamily;
+        if (info.attrs.color) next.color = cssColorToHex(info.attrs.color);
+        if (info.attrs.size) {
+            const oldSizeMap = { '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36 };
+            next.fontSizePt = oldSizeMap[String(info.attrs.size).trim()] || next.fontSizePt;
+        }
+    }
+
+    const css = parseStyleDeclarations(info?.attrs?.style || '');
+    if (css['font-family']) next.fontFamily = normalizeCssFontFamily(css['font-family']) || next.fontFamily;
+    if (css['font-size']) {
+        const size = parseCssSizePt(css['font-size'], next.fontSizePt);
+        if (Number.isFinite(size)) next.fontSizePt = size;
+    }
+    if (css['font-weight']) {
+        const weight = String(css['font-weight']).toLowerCase();
+        const numeric = Number.parseInt(weight, 10);
+        if (weight === 'normal' || weight === 'lighter' || (Number.isFinite(numeric) && numeric < 600)) next.bold = false;
+        if (weight === 'bold' || weight === 'bolder' || (Number.isFinite(numeric) && numeric >= 600)) next.bold = true;
+    }
+    if (css['font-style']) {
+        const fontStyle = String(css['font-style']).toLowerCase();
+        if (fontStyle === 'normal') next.italic = false;
+        if (fontStyle === 'italic' || fontStyle === 'oblique') next.italic = true;
+    }
+    const decoration = css['text-decoration-line'] || css['text-decoration'];
+    if (decoration) {
+        const d = String(decoration).toLowerCase();
+        if (d.includes('none')) { next.underline = false; next.strike = false; }
+        if (d.includes('underline')) next.underline = true;
+        if (d.includes('line-through')) next.strike = true;
+    }
+    if (css['vertical-align']) {
+        const pos = String(css['vertical-align']).toLowerCase();
+        if (pos === 'super') next.position = 'super';
+        else if (pos === 'sub') next.position = 'sub';
+        else if (['baseline', 'normal', '0', '0px'].includes(pos)) next.position = 'normal';
+    }
+    if (css.color) next.color = cssColorToHex(css.color);
+    if (css['background-color']) next.backgroundColor = cssColorToHex(css['background-color']);
+    else if (css.background) next.backgroundColor = cssColorToHex(css.background);
+    return next;
+}
+
+function htmlStyledTokens(html, defaults = {}) {
+    const rawTokens = String(html || '').match(/<[^>]+>|[^<]+/g) || [];
+    const base = inlineFormatBase(defaults);
+    const stack = [{ tag: '#root', format: base }];
+    const output = [];
+
+    for (const raw of rawTokens) {
+        if (!raw.startsWith('<')) {
+            output.push({ type: 'text', raw, format: inlineFormatBase(stack[stack.length - 1].format) });
+            continue;
+        }
+        const info = htmlTagInfo(raw);
+        output.push({ type: 'tag', raw, info });
+        if (!info.name) continue;
+        if (info.closing) {
+            for (let i = stack.length - 1; i > 0; i -= 1) {
+                const item = stack.pop();
+                if (item.tag === info.name) break;
+            }
+            continue;
+        }
+        if (!info.selfClosing) {
+            const next = applyTagInlineFormat(stack[stack.length - 1].format, info);
+            stack.push({ tag: info.name, format: next });
+        }
+    }
+    return output;
+}
+
+function cleanFormatSearchSpec(input = {}) {
+    const size = Number(String(input.fontSizePt ?? '').replace(',', '.'));
+    const fontStyle = ['normal', 'bold', 'italic', 'bold-italic'].includes(input.fontStyle) ? input.fontStyle : null;
+    const position = ['normal', 'super', 'sub'].includes(input.position) ? input.position : null;
+    return {
+        fontFamily: String(input.fontFamily || '').trim() || null,
+        fontStyle,
+        fontSizePt: Number.isFinite(size) && size > 0 ? size : null,
+        underline: typeof input.underline === 'boolean' ? input.underline : null,
+        strike: typeof input.strike === 'boolean' ? input.strike : null,
+        position,
+        color: input.color ? cssColorToHex(input.color) : null,
+        backgroundColor: input.backgroundColor ? cssColorToHex(input.backgroundColor) : null
+    };
+}
+
+function hasFormatSearchSpec(input = {}) {
+    return Object.values(cleanFormatSearchSpec(input)).some((value) => value !== null && value !== '');
+}
+
+function inlineFormatMatchesSpec(actual = {}, wanted = {}) {
+    const spec = cleanFormatSearchSpec(wanted);
+    if (!hasFormatSearchSpec(spec)) return true;
+    if (spec.fontFamily) {
+        if (!actual.fontFamily || normalizeCssFontFamily(actual.fontFamily).toLocaleLowerCase('fr') !== normalizeCssFontFamily(spec.fontFamily).toLocaleLowerCase('fr')) return false;
+    }
+    if (spec.fontSizePt !== null) {
+        if (!Number.isFinite(Number(actual.fontSizePt)) || Math.abs(Number(actual.fontSizePt) - spec.fontSizePt) > 0.35) return false;
+    }
+    if (spec.fontStyle) {
+        const bold = Boolean(actual.bold);
+        const italic = Boolean(actual.italic);
+        if (spec.fontStyle === 'normal' && (bold || italic)) return false;
+        if (spec.fontStyle === 'bold' && (!bold || italic)) return false;
+        if (spec.fontStyle === 'italic' && (bold || !italic)) return false;
+        if (spec.fontStyle === 'bold-italic' && (!bold || !italic)) return false;
+    }
+    if (spec.underline !== null && Boolean(actual.underline) !== spec.underline) return false;
+    if (spec.strike !== null && Boolean(actual.strike) !== spec.strike) return false;
+    if (spec.position && String(actual.position || 'normal') !== spec.position) return false;
+    if (spec.color && cssColorToHex(actual.color) !== spec.color) return false;
+    if (spec.backgroundColor && cssColorToHex(actual.backgroundColor) !== spec.backgroundColor) return false;
+    return true;
+}
+
+function replacementFormatStyle(specInput = {}) {
+    const spec = cleanFormatSearchSpec(specInput);
+    const css = [];
+    if (spec.fontFamily) css.push(`font-family:${String(spec.fontFamily).replace(/[;<>]/g, '')}`);
+    if (spec.fontSizePt !== null) css.push(`font-size:${spec.fontSizePt}pt`);
+    if (spec.fontStyle) {
+        css.push(`font-weight:${spec.fontStyle.includes('bold') ? '700' : '400'}`);
+        css.push(`font-style:${spec.fontStyle.includes('italic') ? 'italic' : 'normal'}`);
+    }
+    if (spec.underline !== null || spec.strike !== null) {
+        const lines = [];
+        if (spec.underline === true) lines.push('underline');
+        if (spec.strike === true) lines.push('line-through');
+        css.push(`text-decoration-line:${lines.length ? lines.join(' ') : 'none'}`);
+    }
+    if (spec.position) css.push(`vertical-align:${spec.position === 'normal' ? 'baseline' : spec.position}`);
+    if (spec.color) css.push(`color:${spec.color}`);
+    if (spec.backgroundColor) css.push(`background-color:${spec.backgroundColor}`);
+    return css.join(';');
+}
+
+function formattedReplacementHtml(text, spec = {}) {
+    const escaped = htmlEscape(String(text ?? ''));
+    if (!escaped || !hasFormatSearchSpec(spec)) return escaped;
+    const style = replacementFormatStyle(spec);
+    return `<span data-ecrivain-format="replace" style="${htmlEscape(style)}">${escaped}</span>`;
+}
+
 function normalizeExportText(value) {
     // Les retours à la ligne présents dans le HTML source (indentation, formatage
     // interne de contenteditable, copier-coller) ne sont PAS des sauts de ligne
@@ -1967,18 +2215,31 @@ function htmlToBlocks(html) {
     const input = String(html || '<p></p>')
         .replace(/\r\n?/g, '\n')
         .replace(/<br\s*\/?>/gi, '<br>');
-    const tokens = input.match(/<[^>]+>|[^<]+/g) || [];
+    const tokens = htmlStyledTokens(input);
     const blocks = [];
     let current = null;
     let listType = null;
-    const styles = { bold: 0, italic: 0, underline: 0, superscript: 0 };
 
     function newBlock(type = 'paragraph') {
         if (current && current.runs.length) flush();
         current = { type, runs: [], listType: type === 'list-item' ? (listType || 'ul') : null };
     }
 
-    function addText(text) {
+    function sameRunStyle(a, b) {
+        return Boolean(a) &&
+            a.bold === b.bold &&
+            a.italic === b.italic &&
+            a.underline === b.underline &&
+            a.strike === b.strike &&
+            a.superscript === b.superscript &&
+            a.subscript === b.subscript &&
+            (a.fontFamily || null) === (b.fontFamily || null) &&
+            Number(a.fontSizePt || 0) === Number(b.fontSizePt || 0) &&
+            (a.color || null) === (b.color || null) &&
+            (a.backgroundColor || null) === (b.backgroundColor || null);
+    }
+
+    function addText(text, format = {}) {
         if (!current) current = { type: 'paragraph', runs: [], listType: null };
         let clean = normalizeExportText(text);
         if (!clean) return;
@@ -1989,16 +2250,27 @@ function htmlToBlocks(html) {
         if (current.runs.length === 0) clean = clean.replace(/^ +/, '');
         if (!clean) return;
 
-        const style = { bold: styles.bold > 0, italic: styles.italic > 0, underline: styles.underline > 0, superscript: styles.superscript > 0 };
+        const style = {
+            bold: Boolean(format.bold),
+            italic: Boolean(format.italic),
+            underline: Boolean(format.underline),
+            strike: Boolean(format.strike),
+            superscript: format.position === 'super',
+            subscript: format.position === 'sub',
+            fontFamily: format.fontFamily || null,
+            fontSizePt: format.fontSizePt !== null && format.fontSizePt !== undefined && format.fontSizePt !== '' && Number.isFinite(Number(format.fontSizePt)) ? Number(format.fontSizePt) : null,
+            color: format.color ? cssColorToHex(format.color) : null,
+            backgroundColor: format.backgroundColor ? cssColorToHex(format.backgroundColor) : null
+        };
         const last = current.runs[current.runs.length - 1];
 
         // Reproduit la fusion des espaces du navigateur à la frontière de deux
         // nœuds texte/éléments inline. Cela évite les doubles espaces quand une
-        // phrase contient du gras ou de l'italique.
+        // phrase contient du gras, de l'italique ou un format local.
         if (last && / $/.test(last.text) && /^ /.test(clean)) clean = clean.replace(/^ +/, '');
         if (!clean) return;
 
-        if (last && last.bold === style.bold && last.italic === style.italic && last.underline === style.underline && last.superscript === style.superscript) {
+        if (sameRunStyle(last, style)) {
             last.text += clean;
         } else {
             current.runs.push({ text: clean, ...style });
@@ -2007,7 +2279,11 @@ function htmlToBlocks(html) {
 
     function addBreak() {
         if (!current) current = { type: 'paragraph', runs: [], listType: null };
-        current.runs.push({ text: '\n', bold: false, italic: false, underline: false, superscript: false });
+        current.runs.push({
+            text: '\n', bold: false, italic: false, underline: false, strike: false,
+            superscript: false, subscript: false, fontFamily: null, fontSizePt: null,
+            color: null, backgroundColor: null
+        });
     }
 
     function flush(force = false) {
@@ -2017,7 +2293,7 @@ function htmlToBlocks(html) {
         // le rendu HTML. On ne touche pas aux espaces insécables typographiques.
         for (let i = current.runs.length - 1; i >= 0; i -= 1) {
             const run = current.runs[i];
-            if (run.text === '\n') break; // <br> explicite : on le conserve.
+            if (run.text === '\n') break;
             run.text = run.text.replace(/ +$/, '');
             if (run.text.length > 0) break;
             current.runs.splice(i, 1);
@@ -2029,14 +2305,14 @@ function htmlToBlocks(html) {
     }
 
     for (const token of tokens) {
-        if (!token.startsWith('<')) {
-            addText(token);
+        if (token.type === 'text') {
+            addText(token.raw, token.format);
             continue;
         }
-        const tag = token.toLowerCase();
-        const closing = /^<\s*\//.test(tag);
-        const nameMatch = tag.match(/^<\s*\/?\s*([a-z0-9]+)/);
-        const name = nameMatch ? nameMatch[1] : '';
+
+        const info = token.info || htmlTagInfo(token.raw);
+        const name = info.name;
+        const closing = info.closing;
 
         if (!closing && ['p', 'div', 'h1', 'h2', 'h3', 'blockquote', 'li'].includes(name)) {
             const typeMap = { p: 'paragraph', div: 'paragraph', h1: 'heading1', h2: 'heading2', h3: 'heading3', blockquote: 'quote', li: 'list-item' };
@@ -2051,15 +2327,6 @@ function htmlToBlocks(html) {
         if (!closing && name === 'ol') { listType = 'ol'; continue; }
         if (closing && (name === 'ul' || name === 'ol')) { listType = null; continue; }
         if (!closing && name === 'br') { addBreak(); continue; }
-
-        if (['strong', 'b'].includes(name)) styles.bold += closing ? -1 : 1;
-        if (['em', 'i'].includes(name)) styles.italic += closing ? -1 : 1;
-        if (name === 'u') styles.underline += closing ? -1 : 1;
-        if (name === 'sup') styles.superscript += closing ? -1 : 1;
-        styles.bold = Math.max(0, styles.bold);
-        styles.italic = Math.max(0, styles.italic);
-        styles.underline = Math.max(0, styles.underline);
-        styles.superscript = Math.max(0, styles.superscript);
     }
     flush();
     return blocks.length ? blocks : [{ type: 'paragraph', runs: [] }];
@@ -2073,10 +2340,18 @@ function renderRunsHtml(runs) {
     return (runs || []).map((run) => {
         const pieces = String(run.text || '').split('\n');
         let text = pieces.map(htmlEscape).join('<br>');
+        if (run.strike) text = `<s>${text}</s>`;
         if (run.underline) text = `<u>${text}</u>`;
         if (run.superscript) text = `<sup>${text}</sup>`;
+        if (run.subscript) text = `<sub>${text}</sub>`;
         if (run.italic) text = `<em>${text}</em>`;
         if (run.bold) text = `<strong>${text}</strong>`;
+        const css = [];
+        if (run.fontFamily) css.push(`font-family:${String(run.fontFamily).replace(/[;<>]/g, '')}`);
+        if (run.fontSizePt !== null && run.fontSizePt !== undefined && run.fontSizePt !== '' && Number.isFinite(Number(run.fontSizePt))) css.push(`font-size:${Number(run.fontSizePt)}pt`);
+        if (run.color) css.push(`color:${cssColorToHex(run.color)}`);
+        if (run.backgroundColor) css.push(`background-color:${cssColorToHex(run.backgroundColor)}`);
+        if (css.length) text = `<span style="${htmlEscape(css.join(';'))}">${text}</span>`;
         return text;
     }).join('');
 }
@@ -2225,16 +2500,24 @@ function makeZip(entries) {
 }
 
 function docxRunXml(run, settings) {
+    const runFont = String(run.fontFamily || settings.font || 'Garamond').replace(/["']/g, '').trim() || settings.font;
+    const runSize = run.fontSizePt !== null && run.fontSizePt !== undefined && run.fontSizePt !== '' && Number.isFinite(Number(run.fontSizePt)) ? Number(run.fontSizePt) : settings.fontSizePt;
     const props = [
-        `<w:rFonts w:ascii="${xmlEscape(settings.font)}" w:hAnsi="${xmlEscape(settings.font)}" w:cs="${xmlEscape(settings.font)}"/>`,
-        `<w:sz w:val="${Math.round(settings.fontSizePt * 2)}"/>`,
-        `<w:szCs w:val="${Math.round(settings.fontSizePt * 2)}"/>`,
+        `<w:rFonts w:ascii="${xmlEscape(runFont)}" w:hAnsi="${xmlEscape(runFont)}" w:cs="${xmlEscape(runFont)}"/>`,
+        `<w:sz w:val="${Math.round(runSize * 2)}"/>`,
+        `<w:szCs w:val="${Math.round(runSize * 2)}"/>`,
         '<w:lang w:val="fr-FR"/>'
     ];
     if (run.bold) props.push('<w:b/>');
     if (run.italic) props.push('<w:i/>');
     if (run.underline) props.push('<w:u w:val="single"/>');
+    if (run.strike) props.push('<w:strike/>');
     if (run.superscript) props.push('<w:vertAlign w:val="superscript"/>');
+    if (run.subscript) props.push('<w:vertAlign w:val="subscript"/>');
+    const color = cssColorToHex(run.color);
+    if (color && /^#[0-9a-f]{6}$/i.test(color)) props.push(`<w:color w:val="${color.slice(1).toUpperCase()}"/>`);
+    const background = cssColorToHex(run.backgroundColor);
+    if (background && /^#[0-9a-f]{6}$/i.test(background)) props.push(`<w:shd w:val="clear" w:color="auto" w:fill="${background.slice(1).toUpperCase()}"/>`);
     const rPr = `<w:rPr>${props.join('')}</w:rPr>`;
     return String(run.text || '').split('\n').map((part, index) => {
         const br = index > 0 ? '<w:br/>' : '';
@@ -2346,16 +2629,58 @@ function buildDocx(project, chapters) {
     ]);
 }
 
-function odtSpanStyle(run) {
-    const key = `${run.bold ? 'B' : ''}${run.italic ? 'I' : ''}${run.underline ? 'U' : ''}${run.superscript ? 'S' : ''}`;
-    return key ? `T_${key}` : '';
+function createOdtTextStyleRegistry(defaultSettings) {
+    const byKey = new Map();
+    const definitions = [];
+
+    function styleFor(run = {}) {
+        const fontFamily = run.fontFamily ? String(run.fontFamily).replace(/["']/g, '').trim() : null;
+        const fontSizePt = run.fontSizePt !== null && run.fontSizePt !== undefined && run.fontSizePt !== '' && Number.isFinite(Number(run.fontSizePt)) ? Number(run.fontSizePt) : null;
+        const color = cssColorToHex(run.color);
+        const backgroundColor = cssColorToHex(run.backgroundColor);
+        const props = {
+            bold: Boolean(run.bold), italic: Boolean(run.italic), underline: Boolean(run.underline),
+            strike: Boolean(run.strike), superscript: Boolean(run.superscript), subscript: Boolean(run.subscript),
+            fontFamily, fontSizePt, color, backgroundColor
+        };
+        const hasAny = Object.values(props).some((value) => value !== null && value !== false && value !== '');
+        if (!hasAny) return '';
+        const key = JSON.stringify(props);
+        if (byKey.has(key)) return byKey.get(key);
+        const name = `T${byKey.size + 1}`;
+        byKey.set(key, name);
+
+        const attrs = [];
+        const effectiveFont = fontFamily || String(defaultSettings.font || 'Garamond').replace(/["']/g, '').trim();
+        const effectiveSize = fontSizePt || Number(defaultSettings.fontSizePt || 11);
+        attrs.push(`fo:font-family="${xmlEscape(effectiveFont)}"`);
+        attrs.push(`fo:font-size="${effectiveSize}pt"`);
+        if (props.bold) attrs.push('fo:font-weight="bold"');
+        if (props.italic) attrs.push('fo:font-style="italic"');
+        if (props.underline) {
+            attrs.push('style:text-underline-style="solid"');
+            attrs.push('style:text-underline-width="auto"');
+        }
+        if (props.strike) attrs.push('style:text-line-through-style="solid"');
+        if (props.superscript) attrs.push('style:text-position="super 58%"');
+        if (props.subscript) attrs.push('style:text-position="sub 58%"');
+        if (color && /^#[0-9a-f]{6}$/i.test(color)) attrs.push(`fo:color="${color}"`);
+        if (backgroundColor && /^#[0-9a-f]{6}$/i.test(backgroundColor)) attrs.push(`fo:background-color="${backgroundColor}"`);
+        definitions.push(`<style:style style:name="${name}" style:family="text"><style:text-properties ${attrs.join(' ')}/></style:style>`);
+        return name;
+    }
+
+    return {
+        styleFor,
+        xml: () => definitions.join('')
+    };
 }
 
-function odtRunsXml(runs) {
+function odtRunsXml(runs, registry) {
     return (runs || []).map((run) => {
         const parts = String(run.text || '').split('\n');
         const content = parts.map((part, i) => `${i ? '<text:line-break/>' : ''}${xmlEscape(part)}`).join('');
-        const style = odtSpanStyle(run);
+        const style = registry?.styleFor ? registry.styleFor(run) : '';
         return style ? `<text:span text:style-name="${style}">${content}</text:span>` : content;
     }).join('');
 }
@@ -2365,6 +2690,7 @@ function buildOdt(project, chapters) {
     const fontFamily = String(s.font || 'Garamond').replace(/["']/g, '').trim() || 'Garamond';
     const fontFaceName = 'ManuscriptFont';
     const body = [];
+    const odtTextStyles = createOdtTextStyleRegistry(s);
     if (project.frontPage !== false) {
         body.push(`<text:p text:style-name="Title">${xmlEscape(normalizeExportText(project.title || 'Projet'))}</text:p>`);
         if (project.subtitle) body.push(`<text:p text:style-name="Subtitle">${xmlEscape(normalizeExportText(project.subtitle))}</text:p>`);
@@ -2382,24 +2708,18 @@ function buildOdt(project, chapters) {
             if (block.type === 'list-item') {
                 listCounter += 1;
                 const prefix = block.listType === 'ol' ? `${listCounter}. ` : '• ';
-                body.push(`<text:p text:style-name="List">${xmlEscape(prefix)}${odtRunsXml(block.runs)}</text:p>`);
+                body.push(`<text:p text:style-name="List">${xmlEscape(prefix)}${odtRunsXml(block.runs, odtTextStyles)}</text:p>`);
             } else {
                 listCounter = 0;
                 const style = block.type === 'quote' ? 'Quote' : block.type === 'heading1' ? 'Heading2' : block.type === 'heading2' ? 'Heading3' : block.type === 'heading3' ? 'Heading4' : 'Body';
                 const tag = block.type.startsWith('heading') ? 'text:h' : 'text:p';
                 const level = block.type === 'heading1' ? 2 : block.type === 'heading2' ? 3 : 4;
                 const outline = tag === 'text:h' ? ` text:outline-level="${level}"` : '';
-                body.push(`<${tag} text:style-name="${style}"${outline}>${odtRunsXml(block.runs)}</${tag}>`);
+                body.push(`<${tag} text:style-name="${style}"${outline}>${odtRunsXml(block.runs, odtTextStyles)}</${tag}>`);
             }
         }
     }
-    const textStyles = ['B','I','U','S','BI','BU','BS','IU','IS','US','BIU','BIS','BUS','IUS','BIUS'].map((key) => {
-        const bold = key.includes('B') ? ' fo:font-weight="bold"' : '';
-        const italic = key.includes('I') ? ' fo:font-style="italic"' : '';
-        const underline = key.includes('U') ? ' style:text-underline-style="solid" style:text-underline-width="auto"' : '';
-        const superscript = key.includes('S') ? ' style:text-position="super 58%"' : '';
-        return `<style:style style:name="T_${key}" style:family="text"><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="${s.fontSizePt}pt"${bold}${italic}${underline}${superscript}/></style:style>`;
-    }).join('');
+    const textStyles = odtTextStyles.xml();
     const contentXml = `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="${fontFaceName}" svg:font-family="'${xmlEscape(fontFamily)}'" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"/></office:font-face-decls><office:automatic-styles>${textStyles}</office:automatic-styles><office:body><office:text>${body.join('')}</office:text></office:body></office:document-content>`;
     const bodyParagraph = `<style:paragraph-properties fo:text-align="justify" fo:text-indent="${mmToCm(s.indentMm)}cm" fo:margin-top="${mmToCm(s.beforeMm)}cm" fo:margin-bottom="${mmToCm(s.afterMm)}cm" fo:line-height="${s.lineSpacingPt}pt"/>`;
@@ -3956,19 +4276,31 @@ function findSearchPositions(text, query, options = {}) {
     return positions;
 }
 
-function htmlSearchTextTokens(html) {
-    return String(html || '').split(/(<[^>]+>)/g);
+function projectSearchInlineDefaults() {
+    // Valeurs d'affichage de l'éditeur. Les formats explicitement stockés dans
+    // le HTML prennent évidemment le dessus sur ces valeurs de base.
+    return inlineFormatBase({
+        fontFamily: 'Georgia',
+        fontSizePt: 17 * 72 / 96,
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+        position: 'normal'
+    });
 }
 
 function chapterSearchDetails(chapter, query, options = {}) {
     const snippets = [];
     let count = 0;
-    for (const token of htmlSearchTextTokens(chapter?.content || '')) {
-        if (!token || token.startsWith('<')) continue;
-        const positions = findSearchPositions(token, query, options);
+    const searchFormat = cleanFormatSearchSpec(options.searchFormat || {});
+    for (const token of htmlStyledTokens(chapter?.content || '', projectSearchInlineDefaults())) {
+        if (token.type !== 'text' || !token.raw) continue;
+        if (!inlineFormatMatchesSpec(token.format, searchFormat)) continue;
+        const positions = findSearchPositions(token.raw, query, options);
         count += positions.length;
         if (snippets.length < 3 && positions.length) {
-            const clean = decodeHtmlEntities(token).replace(/\s+/g, ' ').trim();
+            const clean = decodeHtmlEntities(token.raw).replace(/\s+/g, ' ').trim();
             const cleanPositions = findSearchPositions(clean, query, options);
             for (const pos of cleanPositions) {
                 if (snippets.length >= 3) break;
@@ -4016,25 +4348,45 @@ function replaceSearchTextToken(text, query, replacement, options = {}) {
     const source = String(text ?? '');
     const positions = findSearchPositions(source, query, options);
     if (!positions.length) return { text: source, count: 0 };
+
+    const replacementText = String(replacement ?? '');
+    const replacementFormat = cleanFormatSearchSpec(options.replacementFormat || {});
+    // Un champ « Remplacer par » vide accompagné d'un format signifie :
+    // conserver le texte trouvé et modifier uniquement sa mise en forme.
+    // Sans format, le champ vide conserve son sens classique : suppression.
+    const formatOnly = replacementText.length === 0 && hasFormatSearchSpec(replacementFormat);
+    const style = formatOnly ? replacementFormatStyle(replacementFormat) : '';
+
     let value = source;
     for (let i = positions.length - 1; i >= 0; i -= 1) {
         const pos = positions[i];
-        value = value.slice(0, pos.start) + replacement + value.slice(pos.end);
+        const replacementHtml = formatOnly
+            ? `<span data-ecrivain-format="replace" style="${htmlEscape(style)}">${source.slice(pos.start, pos.end)}</span>`
+            : formattedReplacementHtml(replacementText, replacementFormat);
+        value = value.slice(0, pos.start) + replacementHtml + value.slice(pos.end);
     }
     return { text: value, count: positions.length };
 }
 
 function replaceInChapterHtml(html, query, replacement, options = {}) {
-    const tokens = htmlSearchTextTokens(html);
+    const tokens = htmlStyledTokens(html, projectSearchInlineDefaults());
+    const searchFormat = cleanFormatSearchSpec(options.searchFormat || {});
     let total = 0;
-    for (let i = 0; i < tokens.length; i += 1) {
-        const token = tokens[i];
-        if (!token || token.startsWith('<')) continue;
-        const replaced = replaceSearchTextToken(token, query, replacement, options);
-        tokens[i] = replaced.text;
+    const output = [];
+    for (const token of tokens) {
+        if (token.type === 'tag') {
+            output.push(token.raw);
+            continue;
+        }
+        if (!token.raw || !inlineFormatMatchesSpec(token.format, searchFormat)) {
+            output.push(token.raw || '');
+            continue;
+        }
+        const replaced = replaceSearchTextToken(token.raw, query, replacement, options);
+        output.push(replaced.text);
         total += replaced.count;
     }
-    return { html: tokens.join(''), count: total };
+    return { html: output.join(''), count: total };
 }
 
 async function replaceAcrossProject(query, replacement, options = {}) {

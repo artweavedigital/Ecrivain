@@ -1,5 +1,42 @@
 # Journal des versions
 
+## 0.6.0 bêta.10
+
+- Correction de la persistance des formats locaux du manuscrit : les styles inline enregistrés dans les chapitres (police, taille, soulignement, couleur de texte, surlignage, etc.) sont désormais autorisés par la politique de sécurité de l'interface et restent donc visibles après sauvegarde, changement de chapitre ou réouverture du projet.
+- Le remplacement formaté dans tout le projet affiche maintenant correctement les attributs enregistrés après rechargement du manuscrit.
+- Dans la fenêtre Format, choisir une couleur de texte ou de surlignage active automatiquement cette option ; il n'est plus nécessaire de cocher séparément la case correspondante.
+- Ajout de contrôles de bêta-test spécifiques pour vérifier la persistance du soulignement, de la couleur et du surlignage.
+
+## 0.6.0 bêta.9
+
+- Correction du remplacement formaté dans tout le projet : un champ « Remplacer par » vide avec un format choisi conserve désormais le texte trouvé et modifie uniquement sa mise en forme, au lieu de le supprimer.
+- Le chapitre courant est enregistré avant un remplacement global afin que l’opération travaille toujours sur la dernière version du manuscrit.
+- La confirmation indique explicitement s’il s’agit d’un remplacement, d’une suppression ou d’un changement de format uniquement.
+
+## 0.6.0 bêta.8
+
+### Recherche / remplacement — contrôle du curseur
+
+- correction d’un défaut de la bêta.7 qui pouvait déplacer la sélection dans le manuscrit pendant la frappe lorsque la barre de recherche restait ouverte ;
+- la saisie d’un terme, le changement de casse ou de mot entier ne déclenchent plus automatiquement la recherche ;
+- l’auteur déclenche lui-même la navigation avec les flèches **↑ / ↓** (ou Entrée / Maj+Entrée) ;
+- **Tout rechercher** reste une action volontaire et surligne toutes les occurrences sans déplacer le curseur ;
+- lorsqu’un mot ou une expression est sélectionné dans le manuscrit avant d’ouvrir Rechercher ou Rechercher/Remplacer, la sélection est automatiquement placée dans le champ de recherche ;
+- le même préremplissage est disponible pour la recherche dans tout le projet ;
+- la première navigation part de la position ou de la sélection de l’auteur, puis les flèches parcourent les occurrences dans les deux sens.
+
+## 0.6.0 bêta.7
+
+### Rechercher / remplacer — format avancé
+
+- ajout d’un bouton **Format…** pour le texte recherché et pour le texte de remplacement, dans le chapitre courant comme dans tout le projet ;
+- recherche par police, corps, style (normal, gras, italique, gras italique), soulignement, barré, exposant/indice, couleur de texte et surlignage ;
+- remplacement pouvant appliquer un format différent du texte trouvé — par exemple Arial 10 normal vers Times New Roman 18 gras italique ;
+- bouton **Aucun format** pour supprimer rapidement les critères ou le format de remplacement ;
+- bouton **Tout rechercher** dans le chapitre avec surlignage simultané des occurrences ;
+- remplacement global toujours protégé par une sauvegarde complète et un jalon d’historique ;
+- conservation des formats locaux dans les exports HTML/PDF, EPUB, DOCX et ODT lorsque le format le permet.
+
 ## 0.6.0 bêta.6
 
 ### Grammalecte et extensions
