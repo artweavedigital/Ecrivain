@@ -20,7 +20,7 @@ intelligence artificielle.
 
 ## Version actuelle
 
-**Écrivain 0.6.0 bêta — 0.6.0-beta.11.1**
+** 0.6.0-beta.11.1**
 
 Cette bêta est destinée à être utilisée sur de vrais projets pendant plusieurs mois.
 La priorité n’est plus d’ajouter des fonctions, mais de vérifier la stabilité, le
@@ -46,6 +46,9 @@ confort d’écriture et la fiabilité des exports sur la durée.
 - extension séparée **Correcteur français — Grammalecte 0.2.1**, basée sur le moteur local Grammalecte 2.3.0 ;
 - préférences, projets récents, plein écran, zoom et aide intégrée ;
 - journal technique et rapport de diagnostic pour la phase bêta.
+
+  ## Réalisés avec Ecrivain
+  https://www.publier-un-livre.com/fr/le-livre-en-papier-auteur/36759-stefanos-matsos
 
 ## Une application locale
 
