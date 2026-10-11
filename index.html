@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <!-- Les chapitres conservent volontairement des styles inline de mise en forme (couleurs, surlignage, police, etc.). -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' data:; script-src 'self' data: blob:; img-src 'self' data:; frame-src 'self' data: blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' data:; script-src 'self' data: blob:; img-src 'self' data:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Écrivain</title>
     <link rel="stylesheet" href="vendor/vis-timeline.min.css">
@@ -650,21 +650,42 @@
                     <div class="safety-head">
                         <div>
                             <div class="safety-eyebrow">SÉCURITÉ DU PROJET</div>
-                            <h2>Sauvegardes</h2>
-                            <p>Écrivain conserve au maximum cinq sauvegardes complètes du projet. Les sauvegardes et l’historique eux-mêmes ne sont pas recopiés dans les sauvegardes.</p>
+                            <h2>Sauvegardes et corbeille</h2>
+                            <p>Écrivain conserve cinq sauvegardes manuelles et cinq sauvegardes automatiques du projet : une sauvegarde automatique ne remplace jamais une sauvegarde manuelle. Les chapitres et notes supprimés restent dans la corbeille jusqu’à ce que vous la vidiez.</p>
                         </div>
                         <div class="safety-head__actions">
-                            <button id="backupsOpenFolderBtn" type="button" class="button">📁 Dossier des sauvegardes</button>
-                            <button id="backupsCreateBtn" type="button" class="button button-primary">Sauvegarder maintenant</button>
                             <button id="backupsBackBtn" type="button" class="button">Retour au manuscrit</button>
                         </div>
                     </div>
-                    <div class="safety-summary">
-                        <span id="backupsCount">0 sauvegarde</span>
-                        <span>Rotation automatique : 5 sauvegardes maximum</span>
+                    <div class="safety-tabs" role="tablist" aria-label="Sauvegardes et corbeille">
+                        <button id="safetyTabBackups" type="button" role="tab" class="safety-tab is-active" aria-selected="true" aria-controls="backupsPanel">Sauvegardes</button>
+                        <button id="safetyTabTrash" type="button" role="tab" class="safety-tab" aria-selected="false" aria-controls="trashPanel">Corbeille <span id="trashTabCount" class="safety-tab__count"></span></button>
                     </div>
-                    <div id="backupsEmpty" class="safety-empty">Aucune sauvegarde du projet pour le moment.</div>
-                    <div id="backupsGrid" class="backups-grid"></div>
+
+                    <div id="backupsPanel" class="safety-panel" role="tabpanel" aria-labelledby="safetyTabBackups">
+                        <div class="safety-summary">
+                            <span id="backupsCount">0 sauvegarde</span>
+                            <span id="backupsQuota">Rotation automatique : 5 manuelles et 5 automatiques</span>
+                            <span class="safety-summary__spacer"></span>
+                            <button id="backupsOpenFolderBtn" type="button" class="button button-small">📁 Dossier des sauvegardes</button>
+                            <button id="backupsCreateBtn" type="button" class="button button-primary button-small">Sauvegarder maintenant</button>
+                        </div>
+                        <p id="backupsExternalInfo" class="safety-note"></p>
+                        <div id="backupsEmpty" class="safety-empty">Aucune sauvegarde du projet pour le moment.</div>
+                        <div id="backupsGrid" class="backups-grid"></div>
+                    </div>
+
+                    <div id="trashPanel" class="safety-panel" role="tabpanel" aria-labelledby="safetyTabTrash" hidden>
+                        <div class="safety-summary">
+                            <span id="trashCount">0 élément</span>
+                            <span id="trashSize"></span>
+                            <span class="safety-summary__spacer"></span>
+                            <button id="trashOpenFolderBtn" type="button" class="button button-small">📁 Dossier de la corbeille</button>
+                            <button id="trashEmptyBtn" type="button" class="button button-danger button-small">Vider la corbeille</button>
+                        </div>
+                        <div id="trashEmpty" class="safety-empty">La corbeille est vide. Un chapitre ou une note supprimé y est conservé, avec ses sous-chapitres et ses notes liées.</div>
+                        <div id="trashGrid" class="backups-grid"></div>
+                    </div>
                 </section>
 
                 <section id="historyView" class="safety-view history-view" hidden>
@@ -990,6 +1011,8 @@
                             <label class="field"><span>Au démarrage</span><select id="prefStartup"><option value="welcome">Afficher l’accueil</option><option value="last-project">Rouvrir le dernier projet</option></select></label>
                             <label class="field"><span>Projets récents affichés</span><select id="prefRecentLimit"><option value="3">3 projets</option><option value="5">5 projets</option></select></label>
                             <label class="field"><span>Dossier par défaut des projets</span><div class="preference-folder-row"><input id="prefProjectsDir" type="text" readonly placeholder="Aucun dossier imposé"><button id="prefChooseProjectsDir" type="button" class="button button-small">Choisir…</button></div></label>
+                            <label class="field"><span>Copie externe des sauvegardes</span><div class="preference-folder-row preference-folder-row--clearable"><input id="prefBackupDir" type="text" readonly placeholder="Aucune copie externe"><button id="prefChooseBackupDir" type="button" class="button button-small">Choisir…</button><button id="prefClearBackupDir" type="button" class="button button-small">Effacer</button></div></label>
+                            <p class="preference-note">Chaque sauvegarde du projet est aussi copiée dans ce dossier (clé USB, disque externe ou dossier synchronisé). Les dix plus récentes y sont conservées. Si le dossier est indisponible, la sauvegarde locale est faite quand même.</p>
                         </section>
 
                         <section class="preference-card">
@@ -1105,6 +1128,8 @@
             <button type="button" class="chapter-context-status" data-context-status="review"><span class="chapter-status-dot status-review"></span>À relire<span class="context-check">✓</span></button>
             <button type="button" class="chapter-context-status" data-context-status="final"><span class="chapter-status-dot status-final"></span>Finalisé<span class="context-check">✓</span></button>
             <button type="button" class="chapter-context-status" data-context-status="cut"><span class="chapter-status-dot status-cut"></span>Coupé<span class="context-check">✓</span></button>
+            <div class="chapter-context-separator"></div>
+            <button type="button" class="chapter-context-status" role="menuitemcheckbox" aria-checked="false" data-context-action="toggle-export">Exclure de l’export<span class="context-check">✓</span></button>
             <div class="chapter-context-separator"></div>
             <button type="button" data-context-action="rename">Renommer…</button>
             <button type="button" data-context-action="duplicate">Dupliquer</button>
@@ -1247,6 +1272,8 @@
     </div>
 
     <script src="vendor/vis-timeline.min.js"></script>
+    <script src="shared/text-utils.js"></script>
+    <script src="shared/html-sanitize.js"></script>
     <script src="app.js"></script>
     <script src="global-synopsis.js"></script>
     <script src="editor.js"></script>

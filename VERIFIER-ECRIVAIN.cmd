@@ -4,7 +4,7 @@ cd /d "%~dp0"
 echo Verification d'Ecrivain 0.6.0 beta...
 echo.
 
-for %%F in (main.js preload.js app.js global-synopsis.js editor.js notes.js timeline.js stats.js mindmap.js safety.js search.js ai.js plugins.js settings.js packager-extension.js) do (
+for %%F in (main.js preload.js app.js global-synopsis.js editor.js notes.js timeline.js stats.js mindmap.js safety.js search.js ai.js plugins.js settings.js packager-extension.js shared\text-utils.js shared\html-sanitize.js lib\zip.js lib\fs-safe.js) do (
     if not exist "%%F" (
         echo [ERREUR] Fichier absent : %%F
         pause

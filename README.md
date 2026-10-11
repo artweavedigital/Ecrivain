@@ -20,7 +20,7 @@ intelligence artificielle.
 
 ## Version actuelle
 
-**Écrivain 0.6.0 bêta — 0.6.0-beta.10**
+**Écrivain 0.6.0 bêta — 0.6.0-beta.11.1**
 
 Cette bêta est destinée à être utilisée sur de vrais projets pendant plusieurs mois.
 La priorité n’est plus d’ajouter des fonctions, mais de vérifier la stabilité, le
@@ -41,7 +41,7 @@ confort d’écriture et la fiabilité des exports sur la durée.
 - vérification et récupération silencieuses ;
 - exports Markdown, DOCX, ODT, EPUB et PDF ;
 - assistant IA : Ollama, LM Studio, OpenAI, Anthropic et Mistral ;
-- système d’extensions installables hors ligne (API v2, compatible v1) ;
+- système d’extensions installables hors ligne (API v3, compatible v1 et v2) ;
 - système d’extensions remanié avec espace de travail dédié ;
 - extension séparée **Correcteur français — Grammalecte 0.2.1**, basée sur le moteur local Grammalecte 2.3.0 ;
 - préférences, projets récents, plein écran, zoom et aide intégrée ;
@@ -58,7 +58,7 @@ Les projets sont enregistrés en dehors du programme dans un format documenté :
 
 - format : `ecrivain-project` ;
 - version du format : `1` ;
-- schéma interne : `1.4.0`.
+- schéma interne : `1.5.0`.
 
 Voir `FORMAT-PROJET.md`.
 
@@ -88,9 +88,8 @@ Une extension tierce peut choisir sa propre licence. L’API v2 ajoute des resso
 permettant d’embarquer proprement des moteurs JavaScript et leurs données tout en gardant
 le manuscrit protégé. La compatibilité avec l’API v1 est conservée.
 
-Une préversion de l’interface **Correcteur français — Grammalecte** est fournie dans
-`extensions-exemples/`. Elle permet déjà de tester l’ergonomie et une pré-analyse
-typographique locale. Le véritable moteur Grammalecte GPL n’est pas encore embarqué.
+L’extension **Correcteur français — Grammalecte** est fournie dans
+`extensions-exemples/`. Le moteur Grammalecte (GPL) est embarqué dans cette extension d’exemple et reste un composant distinct du cœur d’Écrivain : voir `GRAMMALECTE.md`.
 
 Voir `EXTENSIONS.md`.
 
@@ -106,6 +105,15 @@ npm.cmd start
 Sous Windows, `LANCER-ECRIVAIN.cmd` lance directement l’application lorsque les
 dépendances sont déjà présentes.
 
+Vérifications et tests automatisés :
+
+```powershell
+npm.cmd run check
+npm.cmd test
+```
+
+Voir `CONTRIBUTING.md` pour le test de l’interface (`npm run test:ui`).
+
 ## Construire la version Windows
 
 Le fichier `CONSTRUIRE-WINDOWS.cmd` :
@@ -114,7 +122,7 @@ Le fichier `CONSTRUIRE-WINDOWS.cmd` :
 2. contrôle la syntaxe du projet ;
 3. fabrique l’application Windows x64 ;
 4. crée une archive portable ;
-5. crée `Ecrivain-Setup-0.6.0-beta.10.exe` si **Inno Setup 6** est installé.
+5. crée `Ecrivain-Setup-0.6.0-beta.11.1.exe` si **Inno Setup 6** est installé.
 
 Les sorties sont placées dans `dist/`.
 

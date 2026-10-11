@@ -25,6 +25,9 @@ window.addEventListener('unhandledrejection', (event) => {
         chapters: [],
         activeId: null,
         dirty: false,
+        revision: 0,                       // incrémenté à chaque frappe : sert à détecter une modification pendant un enregistrement
+        saveChain: Promise.resolve(),      // les enregistrements se font l'un après l'autre
+        wordTimer: null,
         autosaveTimer: null,
         draggedId: null,
         currentView: 'manuscript',
@@ -108,11 +111,31 @@ window.addEventListener('unhandledrejection', (event) => {
         return state.chapters.find((ch) => ch.id === state.activeId) || null;
     }
 
+    // Un seul compteur pour toute l'application : shared/text-utils.js (même code que le processus principal).
     function countWordsFromHtml(html) {
-        const box = document.createElement('div');
-        box.innerHTML = html || '';
-        const text = (box.textContent || '').replace(/\s+/g, ' ').trim();
-        return text ? text.split(' ').filter(Boolean).length : 0;
+        return window.EcrivainText.countWordsFromHtml(html);
+    }
+
+    /**
+     * Tout HTML venu d'un fichier de projet passe par le filtre à liste blanche avant
+     * d'entrer dans la page (un projet reçu d'un tiers ne doit pas pouvoir y injecter
+     * cadres, formulaires, liens dangereux ou styles qui masquent l'interface).
+     */
+    function safeChapterHtml(html, label = 'chapitre') {
+        const source = String(html || '') || '<p></p>';
+        try {
+            const result = window.EcrivainSanitize.sanitizeHtml(source);
+            if (result.removed > 0) {
+                window.ecrivain?.diagnostics?.log?.('warn', `Contenu non pris en charge retiré à l’affichage (${label}).`, { removed: result.removed })?.catch?.(() => {});
+                state.sanitizedNotice = { label, removed: result.removed };
+            }
+            return result.html || '<p></p>';
+        } catch (_) {
+            const escaped = window.EcrivainText.htmlToPlainText(source)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .split(/\n+/).map((line) => `<p>${line}</p>`).join('');
+            return escaped || '<p></p>';
+        }
     }
 
 
@@ -149,12 +172,28 @@ window.addEventListener('unhandledrejection', (event) => {
     function markDirty() {
         if (!activeChapter()) return;
         state.dirty = true;
+        state.revision += 1;
         ui.saveState.textContent = 'À enregistrer';
         ui.saveState.classList.add('is-dirty');
-        updateWordIndicators();
+        scheduleWordIndicators();
+        scheduleAutosave();
+    }
 
+    function scheduleAutosave() {
         window.clearTimeout(state.autosaveTimer);
-        state.autosaveTimer = window.setTimeout(() => saveActiveChapter(true), Number(state.preferences?.autosaveDelayMs || 1800));
+        state.autosaveTimer = window.setTimeout(() => {
+            // Le chapitre a pu être enregistré entre-temps (changement de chapitre, Ctrl+S).
+            if (state.dirty) saveActiveChapter(true);
+        }, Number(state.preferences?.autosaveDelayMs || 1800));
+    }
+
+    // Le recomptage ne se fait pas à chaque frappe : un court délai suffit à l'affichage.
+    function scheduleWordIndicators() {
+        if (state.wordTimer) return;
+        state.wordTimer = window.setTimeout(() => {
+            state.wordTimer = null;
+            updateWordIndicators();
+        }, 200);
     }
 
     function markSaved(auto = false) {
@@ -164,6 +203,8 @@ window.addEventListener('unhandledrejection', (event) => {
     }
 
     function updateWordIndicators() {
+        window.clearTimeout(state.wordTimer);
+        state.wordTimer = null;
         const ch = activeChapter();
         const currentWords = ch && state.activeId === ch.id ? countWordsFromHtml(ui.chapterContent.innerHTML) : 0;
         ui.chapterWords.textContent = `${currentWords} ${currentWords > 1 ? 'mots' : 'mot'}`;
@@ -178,11 +219,13 @@ window.addEventListener('unhandledrejection', (event) => {
 
     function setProjectState(payload) {
         if (!payload) return;
+        window.clearTimeout(state.autosaveTimer);
         state.projectDir = payload.projectDir;
         state.project = payload.project;
         state.chapters = Array.isArray(payload.chapters) ? payload.chapters : [];
         state.activeId = state.chapters[0]?.id || null;
         state.dirty = false;
+        state.revision += 1;
         state.currentView = 'manuscript';
         state.synopsisCards = [];
         state.synopsisFilter = 'all';
@@ -305,6 +348,12 @@ window.addEventListener('unhandledrejection', (event) => {
             button.classList.toggle('is-current', active);
             button.setAttribute('aria-checked', active ? 'true' : 'false');
         });
+        const exportToggle = ui.chapterContextMenu.querySelector('[data-context-action="toggle-export"]');
+        if (exportToggle) {
+            const excluded = chapter.excludeFromExport === true;
+            exportToggle.classList.toggle('is-current', excluded);
+            exportToggle.setAttribute('aria-checked', excluded ? 'true' : 'false');
+        }
         const indent = ui.chapterContextMenu.querySelector('[data-context-action="indent"]');
         const outdent = ui.chapterContextMenu.querySelector('[data-context-action="outdent"]');
         if (indent) indent.disabled = !canIndentChapter(chapter);
@@ -364,6 +413,23 @@ window.addEventListener('unhandledrejection', (event) => {
         if (action === 'rename') return renameActiveChapter();
         if (action === 'duplicate') return duplicateActiveChapter();
         if (action === 'delete') return deleteActiveChapter();
+        if (action === 'toggle-export') return toggleActiveChapterExport();
+    }
+
+    async function toggleActiveChapterExport() {
+        const chapter = activeChapter();
+        if (!chapter) return;
+        const excluded = chapter.excludeFromExport !== true;
+        try {
+            const result = await window.ecrivain.chapters.setExcluded(chapter.id, excluded);
+            chapter.excludeFromExport = result.excludeFromExport === true;
+            renderChapters();
+            showToast(chapter.excludeFromExport
+                ? 'Ce chapitre (et ses sous-chapitres) ne sera plus exporté.'
+                : 'Ce chapitre sera de nouveau exporté.');
+        } catch (error) {
+            showToast(error.message || 'Impossible de modifier l’export de ce chapitre.', true);
+        }
     }
 
     function renderChapters() {
@@ -401,7 +467,8 @@ window.addEventListener('unhandledrejection', (event) => {
             const sub = document.createElement('small');
             sub.className = 'chapter-state';
             const chapterStatus = statusLabels[normalizedStatus] || 'Brouillon';
-            sub.textContent = Number(chapter._depth || 0) > 0 ? `Sous-chapitre · ${chapterStatus}` : chapterStatus;
+            sub.textContent = (Number(chapter._depth || 0) > 0 ? `Sous-chapitre · ${chapterStatus}` : chapterStatus)
+                + (chapter.excludeFromExport === true ? ' · hors export' : '');
             copy.append(titleLine, sub);
 
             const number = document.createElement('span');
@@ -449,10 +516,15 @@ window.addEventListener('unhandledrejection', (event) => {
         ui.editorArea.hidden = false;
         ui.chapterTitle.value = chapter.title || '';
         ui.chapterStatus.value = normalizeStatus(chapter.status);
-        ui.chapterContent.innerHTML = chapter.content || '<p></p>';
+        state.sanitizedNotice = null;
+        ui.chapterContent.innerHTML = safeChapterHtml(chapter.content, `chapitre « ${chapter.title || 'Sans titre'} »`);
         applyDocumentSettings();
         markSaved(false);
         updateWordIndicators();
+        if (state.sanitizedNotice) {
+            state.sanitizedNotice = null;
+            showToast('Des éléments non pris en charge (scripts, cadres, formulaires…) ont été retirés de l’affichage de ce chapitre. Le fichier n’est modifié qu’à l’enregistrement ; l’historique conserve la version d’origine.', true);
+        }
     }
 
     function normalizeStatus(status) {
@@ -461,10 +533,24 @@ window.addEventListener('unhandledrejection', (event) => {
         return ['draft', 'writing', 'review', 'final', 'cut'].includes(status) ? status : 'draft';
     }
 
-    async function saveActiveChapter(auto = false) {
-        const chapter = activeChapter();
-        if (!chapter || !state.projectDir) return;
+    /**
+     * Enregistrement du chapitre ouvert.
+     * Les enregistrements sont exécutés l'un après l'autre. Si l'utilisateur continue
+     * à écrire pendant qu'un enregistrement est en cours, le chapitre reste marqué
+     * « à enregistrer » et un nouvel enregistrement est planifié : aucune frappe n'est perdue.
+     */
+    function saveActiveChapter(auto = false) {
         window.clearTimeout(state.autosaveTimer);
+        const run = state.saveChain.then(() => saveActiveChapterNow(auto));
+        state.saveChain = run.catch(() => null);
+        return run;
+    }
+
+    async function saveActiveChapterNow(auto) {
+        const chapter = activeChapter();
+        if (!chapter || !state.projectDir) return null;
+        const chapterId = chapter.id;
+        const revision = state.revision;
 
         const payload = {
             ...chapter,
@@ -477,7 +563,12 @@ window.addEventListener('unhandledrejection', (event) => {
             const saved = await window.ecrivain.chapters.save(payload, { mode: auto ? 'autosave' : 'manual' });
             const index = state.chapters.findIndex((ch) => ch.id === saved.id);
             if (index >= 0) state.chapters[index] = { ...state.chapters[index], ...saved };
-            markSaved(auto);
+            if (state.activeId === chapterId && state.revision === revision) {
+                markSaved(auto);
+            } else if (state.dirty) {
+                // Modifié pendant l'enregistrement : on garde l'état « à enregistrer ».
+                scheduleAutosave();
+            }
             renderChapters();
             updateProjectIndicators();
             return saved;
@@ -485,6 +576,14 @@ window.addEventListener('unhandledrejection', (event) => {
             showToast(error.message || 'Impossible d’enregistrer le chapitre.', true);
             return null;
         }
+    }
+
+    // Attend la fin de tous les enregistrements, y compris ceux qui viennent d'être demandés.
+    async function flushChapter() {
+        window.clearTimeout(state.autosaveTimer);
+        if (state.dirty) await saveActiveChapter(true);
+        await state.saveChain;
+        return !state.dirty;
     }
 
     async function newProject() {
@@ -622,16 +721,33 @@ window.addEventListener('unhandledrejection', (event) => {
         await saveActiveChapter(false);
     }
 
+    function plural(count, singular, pluralForm) {
+        return `${count.toLocaleString('fr-FR')} ${count > 1 ? pluralForm : singular}`;
+    }
+
     async function deleteActiveChapter() {
         const ch = activeChapter();
         if (!ch) return;
-        const ok = await showConfirm(`Supprimer « ${ch.title || 'ce chapitre'} » ?`, 'Les éventuels sous-chapitres associés seront également supprimés.');
+
+        let detail = 'Le chapitre sera placé dans la corbeille ; vous pourrez le restaurer depuis Projet → Corbeille.';
+        try {
+            const preview = await window.ecrivain.chapters.deletePreview(ch.id);
+            const parts = [plural(preview.chapters, 'chapitre', 'chapitres')];
+            if (preview.subchapters > 0) parts[0] += ` (dont ${plural(preview.subchapters, 'sous-chapitre', 'sous-chapitres')})`;
+            if (preview.notes > 0) parts.push(plural(preview.notes, 'note liée', 'notes liées'));
+            parts.push(plural(preview.words, 'mot', 'mots'));
+            detail = `Seront placés dans la corbeille : ${parts.join(', ')}. Vous pourrez les restaurer depuis Projet → Corbeille.`;
+        } catch (_) { /* l'aperçu est un confort : on confirme quand même */ }
+
+        const ok = await showConfirm(`Mettre « ${ch.title || 'ce chapitre'} » à la corbeille ?`, detail, 'Mettre à la corbeille');
         if (!ok) return;
         try {
+            // Le texte tapé à l'instant doit aussi se retrouver dans la corbeille.
+            await flushChapter();
             await window.ecrivain.chapters.delete(ch.id);
             const refreshed = await window.ecrivain.project.state();
             setProjectState(refreshed);
-            showToast('Chapitre supprimé.');
+            showToast('Chapitre placé dans la corbeille (Projet → Corbeille pour le restaurer).');
         } catch (error) {
             showToast(error.message || 'Suppression impossible.', true);
         }
@@ -796,7 +912,10 @@ window.addEventListener('unhandledrejection', (event) => {
             const fn = window.ecrivain.export[kind];
             if (typeof fn !== 'function') throw new Error(`Export ${label} indisponible.`);
             const result = await fn();
-            if (result && !result.canceled) showToast(`${label} créé : ${result.filePath}`);
+            if (result && !result.canceled) {
+                const skipped = Number(result.excluded || 0);
+                showToast(`${label} créé : ${result.filePath}${skipped ? ` (${plural(skipped, 'chapitre non exporté', 'chapitres non exportés')} : « Coupé » ou exclus)` : ''}`);
+            }
         } catch (error) {
             showToast(error.message || `Impossible d’exporter en ${label}.`, true);
         }
@@ -815,6 +934,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (state.dirty) await saveActiveChapter(true);
 
         const project = state.project;
+        const excludedStatuses = new Set(Array.isArray(project.exportExcludeStatuses) ? project.exportExcludeStatuses : ['cut']);
         const fields = [
             { section: 'Typographie' },
             { id: 'exportFont', label: 'Police du manuscrit', value: String(project.exportFont || 'Garamond'), type: 'select', options: manuscriptFonts },
@@ -833,11 +953,25 @@ window.addEventListener('unhandledrejection', (event) => {
             { id: 'paragraphSpacingBeforeMm', label: 'Espace avant', value: numericValue(project.paragraphSpacingBeforeMm, 0), unit: 'mm', min: 0, max: 30, step: 0.1 },
             { id: 'paragraphSpacingAfterMm', label: 'Espace après', value: numericValue(project.paragraphSpacingAfterMm, 0), unit: 'mm', min: 0, max: 30, step: 0.1 },
             { section: 'Chapitres' },
-            { id: 'chapterPageBreak', label: 'Commencer chaque chapitre sur une nouvelle page à l’export', value: project.chapterPageBreak !== false, type: 'checkbox' }
+            { id: 'chapterPageBreak', label: 'Commencer chaque chapitre sur une nouvelle page à l’export', value: project.chapterPageBreak !== false, type: 'checkbox' },
+            { section: 'Pagination' },
+            { id: 'pageNumbers', label: 'Numéroter les pages (Word, OpenDocument, PDF) — la page de titre est comptée mais reste vierge', value: project.pageNumbers !== false, type: 'checkbox' },
+            { id: 'runningHeader', label: 'En-tête courant', value: String(project.runningHeader || 'none'), type: 'select', options: [
+                { value: 'none', label: 'Aucun' },
+                { value: 'title', label: 'Titre du livre' },
+                { value: 'author', label: 'Nom de l’auteur' },
+                { value: 'author-title', label: 'Auteur (pages paires) et titre (pages impaires)' }
+            ] },
+            { section: 'Chapitres exportés' },
+            { id: 'excludeCut', label: 'Ne pas exporter les chapitres au statut « Coupé »', value: excludedStatuses.has('cut'), type: 'checkbox' },
+            { id: 'excludeDraft', label: 'Ne pas exporter les chapitres au statut « Brouillon »', value: excludedStatuses.has('draft'), type: 'checkbox' }
         ];
 
         const values = await showSettingsModal('Configuration du document', fields);
         if (!values) return;
+        values.exportExcludeStatuses = [...excludedStatuses].filter((status) => status !== 'cut' && status !== 'draft');
+        if (values.excludeCut) values.exportExcludeStatuses.push('cut');
+        if (values.excludeDraft) values.exportExcludeStatuses.push('draft');
 
         try {
             const updated = await window.ecrivain.project.updateLayout(values);
@@ -859,7 +993,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
             const note = document.createElement('p');
             note.className = 'document-settings-note';
-            note.textContent = 'Réglages communs à l’édition et aux exports : typographie, page, marges, paragraphes et comportement des chapitres. Les dimensions de page sont en cm ; marges et retraits en mm.';
+            note.textContent = 'Réglages communs à l’édition et aux exports : typographie, page, marges, paragraphes, pagination et chapitres exportés. Les dimensions de page sont en cm ; marges et retraits en mm.';
             ui.modalBody.appendChild(note);
 
             const grid = document.createElement('div');
@@ -911,12 +1045,13 @@ window.addEventListener('unhandledrejection', (event) => {
                 const input = field.type === 'select' ? document.createElement('select') : document.createElement('input');
                 input.id = `setting-${field.id}`;
                 if (field.type === 'select') {
-                    const options = Array.isArray(field.options) ? field.options.slice() : [];
-                    if (field.value && !options.includes(String(field.value))) options.unshift(String(field.value));
-                    for (const optionValue of options) {
+                    const options = (Array.isArray(field.options) ? field.options : [])
+                        .map((item) => (typeof item === 'object' ? { value: String(item.value), label: String(item.label ?? item.value) } : { value: String(item), label: String(item) }));
+                    if (field.value && !options.some((item) => item.value === String(field.value))) options.unshift({ value: String(field.value), label: String(field.value) });
+                    for (const item of options) {
                         const option = document.createElement('option');
-                        option.value = optionValue;
-                        option.textContent = optionValue;
+                        option.value = item.value;
+                        option.textContent = item.label;
                         input.appendChild(option);
                     }
                     input.value = String(field.value);
@@ -1440,7 +1575,7 @@ window.addEventListener('unhandledrejection', (event) => {
         });
     }
 
-    function showConfirm(title, detail) {
+    function showConfirm(title, detail, confirmLabel = 'Supprimer') {
         return new Promise((resolve) => {
             ui.modalTitle.textContent = title;
             ui.modalBody.innerHTML = '';
@@ -1449,7 +1584,7 @@ window.addEventListener('unhandledrejection', (event) => {
             p.style.color = '#6f6962';
             p.style.lineHeight = '1.5';
             ui.modalBody.appendChild(p);
-            ui.modalConfirm.textContent = 'Supprimer';
+            ui.modalConfirm.textContent = confirmLabel;
             ui.modalBackdrop.hidden = false;
 
             function cleanup(value) {
@@ -1592,6 +1727,12 @@ window.addEventListener('unhandledrejection', (event) => {
                 window.ecrivainAI?.closeForSwitch?.();
                 if (state.dirty) await saveActiveChapter(true);
                 return window.ecrivainSafety?.openBackups ? window.ecrivainSafety.openBackups() : featureComing('Sauvegardes');
+            case 'feature:trash':
+                await closeGlobalSynopsisForSwitch();
+                window.ecrivainSearch?.closeProjectView?.(false);
+                window.ecrivainAI?.closeForSwitch?.();
+                if (state.dirty) await saveActiveChapter(true);
+                return window.ecrivainSafety?.openTrash ? window.ecrivainSafety.openTrash() : featureComing('Corbeille');
             case 'feature:history':
                 await closeGlobalSynopsisForSwitch();
                 window.ecrivainSearch?.closeProjectView?.(false);
@@ -1679,7 +1820,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (state.activeId === chapter.id) {
             ui.chapterTitle.value = chapter.title || ui.chapterTitle.value || 'Sans titre';
             ui.chapterStatus.value = normalizeStatus(chapter.status);
-            ui.chapterContent.innerHTML = chapter.content || '<p></p>';
+            ui.chapterContent.innerHTML = safeChapterHtml(chapter.content, `chapitre « ${chapter.title || 'Sans titre'} »`);
             markSaved(false);
             applyDocumentSettings();
         }
@@ -1697,9 +1838,16 @@ window.addEventListener('unhandledrejection', (event) => {
         loadProjectState: (payload) => setProjectState(payload),
         openRecentProject: (projectDir) => openRecentProject(projectDir),
         flushActiveChapter: async () => {
-            if (!state.dirty) return true;
-            const saved = await saveActiveChapter(true);
-            return Boolean(saved);
+            await flushChapter();
+            return !state.dirty;
+        },
+        // Met à jour la liste des chapitres sans quitter la vue en cours (restauration depuis la corbeille).
+        refreshChapterList: (payload) => {
+            if (!payload || !Array.isArray(payload.chapters)) return;
+            state.chapters = payload.chapters;
+            if (!state.chapters.some((chapter) => chapter.id === state.activeId)) state.activeId = state.chapters[0]?.id || null;
+            renderChapters();
+            updateProjectIndicators();
         },
         syncChapter: (chapter) => syncChapterFromExternal(chapter),
         reloadProject: async (preferredChapterId = null) => {
@@ -1791,6 +1939,20 @@ window.addEventListener('unhandledrejection', (event) => {
         }
     }).catch(() => {});
 
+    // Fermeture de la fenêtre : le processus principal demande un enregistrement complet
+    // (chapitre en cours et synopsis global) puis attend cet accusé avant de fermer.
+    window.ecrivain.appLifecycle?.onFlushRequest?.(async () => {
+        try {
+            if (window.ecrivainGlobalSynopsis?.flush) await window.ecrivainGlobalSynopsis.flush();
+            await flushChapter();
+        } catch (_) {
+            /* le processus principal ferme de toute façon après son délai */
+        } finally {
+            window.ecrivain.appLifecycle.flushDone();
+        }
+    });
+
+    // Rechargement de la page (développement) : dernier filet de sécurité.
     window.addEventListener('beforeunload', () => {
         if (state.dirty) saveActiveChapter(true);
     });

@@ -1,9 +1,9 @@
-Écrivain 0.6.0 bêta.10
+Écrivain 0.6.0 bêta.11.1
 
-Version applicative : 0.6.0-beta.10
+Version applicative : 0.6.0-beta.11.1
 Format de projet : ecrivain-project v1
-Schéma interne : 1.4.0
-API d’extensions : v2 (compatibilité v1)
+Schéma interne : 1.5.0
+API d’extensions : v3 (compatibilité v1 et v2)
 
 Cette version est destinée à un usage réel de longue durée afin de stabiliser le
 logiciel avant la version 1.0.

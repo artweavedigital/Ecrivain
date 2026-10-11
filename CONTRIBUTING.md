@@ -18,3 +18,17 @@ soit distribuée sous la licence du projet telle qu’indiquée dans `LICENSE`, 
 
 Les extensions tierces restent indépendantes et peuvent utiliser une autre licence,
 sous réserve du respect des marques et de l’identité visuelle d’Écrivain.
+
+## Vérifier avant de proposer une modification
+
+```text
+npm install
+npm run check
+npm test
+```
+
+`npm test` exécute les vrais gestionnaires du processus principal avec un module Electron
+simulé (`test/helpers/mock-electron.js`) : aucune fenêtre n’est nécessaire. Toute correction
+de bug doit s’accompagner d’un test qui échouait avant elle. `npm run test:ui` lance en plus
+un test de l’interface dans Chromium (`npm install --no-save playwright` puis
+`npx playwright install chromium`).

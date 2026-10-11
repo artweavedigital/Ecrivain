@@ -39,32 +39,11 @@
         return Boolean(element && editor.contains(element));
     }
 
+    // Typographie française : une seule implémentation, partagée avec les exports
+    // (shared/text-utils.js). Elle protège les adresses web et courriel et laisse
+    // intactes les heures (12:30).
     function normalizeText(text) {
-        let value = String(text || '');
-
-        // Apostrophes et points de suspension.
-        value = value.replace(/([\p{L}\p{N}])'(?=[\p{L}\p{N}])/gu, '$1’');
-        value = value.replace(/\.\.\./g, '…');
-
-        // Espaces indésirables avant ponctuation basse.
-        value = value.replace(/[ \t\u00A0\u202F]+([,.])/g, '$1');
-
-        // Ponctuation haute française : insécable devant « : », fine insécable
-        // devant « ; ? ! ». Les espaces après restent normales.
-        value = value.replace(/[ \t\u00A0\u202F]*:/g, `${NBSP}:`);
-        value = value.replace(/[ \t\u00A0\u202F]*([;?!])/g, `${NNBSP}$1`);
-
-        // Guillemets français : insécables à l'intérieur.
-        value = value.replace(/«[ \t\u00A0\u202F]*/g, `«${NBSP}`);
-        value = value.replace(/[ \t\u00A0\u202F]*»/g, `${NBSP}»`);
-
-        // Une seule espace après la ponctuation, sans toucher aux retours de ligne.
-        value = value.replace(/([,:;?!])[ \t\u00A0\u202F]{2,}/g, '$1 ');
-
-        // Espace insécable devant certains symboles typographiques fréquents.
-        value = value.replace(/[ \t\u00A0\u202F]*([%€])/g, `${NBSP}$1`);
-
-        return value;
+        return window.EcrivainText.applyFrenchTypography(text);
     }
 
     function firstTextNode(block) {
@@ -87,7 +66,7 @@
         // placés au milieu d'une phrase.
         const first = firstTextNode(block);
         if (first) {
-            first.nodeValue = first.nodeValue.replace(/^\s*-\s+/, '— ');
+            first.nodeValue = window.EcrivainText.fixDialogueDash(first.nodeValue);
         }
     }
 

@@ -6,6 +6,7 @@ Décrire brièvement la modification.
 
 - [ ] Je n’ai pas modifié le format de projet sans migration explicite.
 - [ ] `npm run check` réussit.
+- [ ] `npm test` réussit, avec un test pour tout bug corrigé.
 - [ ] J’ai testé la fonction concernée sur un projet de test.
 - [ ] Je n’ai ajouté aucune télémétrie ni collecte implicite de contenu utilisateur.
 - [ ] Les nouvelles permissions d’extension sont documentées si nécessaire.

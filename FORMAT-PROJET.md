@@ -38,6 +38,7 @@ Mon Roman/
 ├── styles/
 ├── backups/
 ├── history/
+├── trash/
 ├── recovery/
 └── extensions/
 ```
@@ -73,3 +74,55 @@ extensions/
 ```
 
 La présence de ce dossier est additive et reste compatible avec `formatVersion: 1`.
+
+## Champs ajoutés par la bêta.11 (schéma interne 1.5.0)
+
+Tous sont facultatifs et additifs : un projet qui ne les contient pas reste valide, et
+une version antérieure d’Écrivain qui les rencontre les ignore.
+
+`project.json` :
+
+| Champ | Rôle |
+| --- | --- |
+| `uuid` | Identifiant stable du projet (UUID), ajouté à l’ouverture d’un ancien projet. Il sert d’identifiant à l’EPUB exporté (`urn:uuid:…`). |
+| `pageNumbers` | `true` (par défaut si absent) ou `false` : numéroter les pages des exports Word, OpenDocument et PDF. |
+| `runningHeader` | En-tête courant des exports : `none` (défaut), `title`, `author` ou `author-title` (auteur sur les pages paires, titre sur les pages impaires). |
+| `exportExcludeStatuses` | Liste des statuts de chapitre non exportés. Par défaut `["cut"]` ; `"draft"` est aussi accepté. |
+
+Chapitres (`chapters/<id>.json`) :
+
+| Champ | Rôle |
+| --- | --- |
+| `wcv` | Version du compteur de mots qui a produit `wordCount` (actuellement `2`). Un chapitre dont `wcv` diffère est recompté une seule fois à l’ouverture. |
+| `excludeFromExport` | `true` : le chapitre, et ses sous-chapitres, ne sont pas exportés. |
+| `status` | `draft`, `writing`, `review`, `final` ou `cut`. |
+
+Sauvegardes (`backups/backup-*/backup.json`) : `kind` vaut `manual` ou `auto` (chaque type
+a son propre quota de cinq sauvegardes). Une sauvegarde ne contient ni `backups/`, ni
+`history/`, ni `exports/`, ni `trash/`.
+
+## Corbeille
+
+Supprimer un chapitre ou une note ne l’efface pas : l’élément est déplacé dans `trash/`.
+
+```text
+trash/
+└── 20260131-101502-123-ch-xxxx/
+    ├── manifest.json
+    ├── chapters/      (le chapitre et ses sous-chapitres)
+    ├── notes/         (les notes liées)
+    └── files/         (leurs pièces jointes)
+```
+
+Le fichier `manifest.json` est écrit en premier : une opération interrompue laisse donc un
+élément récupérable, signalé comme incomplet. La restauration ne remplace jamais un
+chapitre ou une note qui existe déjà ; l’élément concerné reste dans la corbeille.
+La corbeille n’est jamais vidée automatiquement. Elle est conservée telle quelle lors de
+la restauration d’une sauvegarde.
+
+## Historique des chapitres
+
+Dans `history/<identifiant-du-chapitre>/`, les jalons automatiques (`…-autosave.json`) sont
+allégés : tous conservés pendant sept jours, puis un par jour jusqu’à trente jours, puis un
+par semaine. Les jalons manuels, `avant-restauration` et de remplacement global ne sont
+jamais supprimés.

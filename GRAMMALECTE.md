@@ -1,10 +1,10 @@
 # Grammalecte dans Écrivain
 
-Écrivain 0.6.0-beta.10 utilise l’API d’extensions v3 pour permettre au correcteur Grammalecte d’appliquer une correction **uniquement après validation explicite de l’auteur**.
+Écrivain 0.6.0-beta.11.1 utilise l’API d’extensions v3 pour permettre au correcteur Grammalecte d’appliquer une correction **uniquement après validation explicite de l’auteur**.
 
 ## Installation
 
-Installez `grammalecte-fr-0.3.0.ecrivain-plugin` depuis **Outils → Extensions → Installer une extension…**. Si une ancienne version est déjà présente, choisissez **Remplacer**.
+Installez `extensions-exemples/grammalecte-fr.ecrivain-plugin` (extension 0.3.0) depuis **Outils → Extensions → Installer une extension…**. Si une ancienne version est déjà présente, choisissez **Remplacer**.
 
 ## Fonctionnement
 

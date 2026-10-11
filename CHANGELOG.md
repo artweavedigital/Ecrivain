@@ -1,5 +1,71 @@
 # Journal des versions
 
+## 0.6.0 bêta.11.1 — espace insécable ordinaire dans les fichiers Word, OpenDocument et Markdown
+
+Version corrective de la bêta.11, sans aucun autre changement : le format de projet, la mise en page, les styles, les sauts de page, les numéros de page et les en-têtes sont ceux de la bêta.11.
+
+- Dans les fichiers **Word (.docx)**, **OpenDocument (.odt)** et **Markdown (.md)**, l’espace avant « ; », « ? » et « ! » est une **espace insécable ordinaire (U+00A0)** au lieu de l’espace fine insécable (U+202F), que beaucoup de polices et plusieurs logiciels de mise en page (XPress, Scribus) ne reconnaissent pas. Les espaces avant « : », à l’intérieur des guillemets et avant « % » et « € » étaient déjà des espaces insécables ordinaires.
+- Cela concerne le texte, le titre du livre, le sous-titre, le nom de l’auteur, les titres de chapitres et les en-têtes courants de ces trois fichiers. Le manuscrit enregistré n’est pas modifié : les espaces fines déjà saisies sont converties à l’export.
+- **Inchangés** : l’EPUB, le PDF et le bouton **Typo FR** de l’éditeur gardent l’espace fine insécable (U+202F). Dans le Markdown, les titres restent tels qu’ils ont été saisis, comme en bêta.11.
+- Les changements des versions d’essai bêta.12 et bêta.13 (chapitres sur page impaire, nouveau style de sous-chapitre, réglages ajoutés à la configuration du document) ne sont pas repris.
+- Vérification : les fichiers Word, OpenDocument et Markdown produits sont identiques à ceux de la bêta.11, caractère pour caractère, à l’exception de l’espace (U+202F devenue U+00A0) ; l’EPUB et le document d’impression du PDF sont identiques. Dans LibreOffice, chaque chapitre et sous-chapitre commence sur une nouvelle page. 54 tests automatisés (4 de plus).
+
+## 0.6.0 bêta.11 — fiabilité des données, sécurité et exports
+
+Cette version ne change pas le format de projet (`ecrivain-project` v1) : les ajouts sont des champs et un dossier facultatifs. Un projet de la bêta.10 s’ouvre sans migration visible ; les nouveaux champs sont ajoutés à l’ouverture ou à la première modification des réglages.
+
+### Texte, comptage et enregistrement
+
+- **Un seul compteur de mots**, partagé par l’éditeur, les statistiques, l’enregistrement, l’assistant IA et les exports (`shared/text-utils.js`). Un mot est une suite de caractères séparés par des espaces, insécables compris, qui contient au moins une lettre ou un chiffre : les tirets cadratins de dialogue, les « & » isolés et les ponctuations seules ne comptent plus, « 2<sup>e</sup> » compte pour un seul mot. La version du compteur est inscrite dans chaque chapitre (`wcv`) : les chapitres existants sont recalculés **une seule fois** à l’ouverture, sans créer de « mots ajoutés » dans les statistiques. Les totaux de vos chapitres peuvent donc changer légèrement.
+- **Typographie française unifiée** : mêmes règles dans l’éditeur et dans les exports, application idempotente (la relancer ne change plus rien), adresses web et courriels intacts, heures (« 12:30 ») préservées, une seule espace fine insécable pour « ?! », tiret de dialogue converti uniquement en début de paragraphe.
+- **Enregistrements en série** : une frappe faite pendant qu’un enregistrement est en cours n’est plus marquée comme enregistrée à tort ; deux enregistrements simultanés ne peuvent plus s’écraser.
+- **Écriture atomique** des fichiers de données du projet (chapitres, notes, synopsis, chronologie, statistiques, `project.json`…) et des préférences (fichier temporaire, écriture physique forcée, renommage) : un arrêt brutal laisse l’ancienne ou la nouvelle version, jamais un fichier tronqué. Les fichiers temporaires orphelins sont nettoyés.
+- **Fermeture sûre** : à la fermeture de la fenêtre, le processus principal demande à l’interface d’enregistrer le chapitre en cours et le synopsis global, attend l’accusé, puis attend la fin des écritures avant de quitter (délai de sécurité de six secondes).
+
+### Corbeille, sauvegardes et historique
+
+- **Corbeille du projet** (menu **Projet → Corbeille**, ou onglet dans l’écran des sauvegardes) : supprimer un chapitre, avec ses sous-chapitres, ses notes liées et leurs pièces jointes, ou supprimer une note, les place dans `trash/` au lieu de les effacer. L’écran de confirmation annonce ce qui sera déplacé. Restauration en un clic (un élément déjà présent n’est jamais écrasé : il reste dans la corbeille et l’interface le signale), suppression définitive et vidage avec confirmation. La corbeille n’est jamais vidée automatiquement.
+- **Sauvegardes** : cinq sauvegardes manuelles et cinq automatiques, avec des quotas indépendants (un grand nombre de sauvegardes automatiques ne chasse plus les manuelles). Le type est enregistré dans `backup.json` (`kind`).
+- **Copie externe facultative** de chaque sauvegarde dans un dossier choisi dans les Préférences (disque externe, dossier synchronisé) : dix copies conservées par projet ; si le dossier est introuvable, la sauvegarde locale réussit quand même et l’échec est signalé.
+- Une sauvegarde n’emporte plus `history/`, `exports/`, `trash/` ni les anciennes sauvegardes : elle est plus petite et ne s’emboîte plus dans elle-même.
+- **Restauration d’une sauvegarde** : l’état courant est sauvegardé d’abord ; la corbeille, l’historique, les exports et les autres sauvegardes sont conservés intacts.
+- **Historique des chapitres** : tous les jalons automatiques sont gardés pendant sept jours, puis un par jour jusqu’à trente jours, puis un par semaine. Les jalons manuels, « avant restauration » et « remplacement global » ne sont jamais supprimés.
+
+### Sécurité
+
+- **Contenu importé nettoyé** : le HTML des chapitres et des notes est filtré par liste blanche avant d’entrer dans l’interface (`shared/html-sanitize.js`). Un projet reçu d’un tiers ne peut plus y introduire de script, de cadre, de formulaire, de lien `javascript:`, d’image distante ni de style capable de masquer l’interface. Ce que produit l’éditeur (gras, italique, souligné, barré, exposant, indice, titres, citations, listes, polices, corps, couleur, surlignage) est conservé tel quel.
+- **Identifiants validés** : tout identifiant venu de l’interface (chapitre, note, version d’historique, sauvegarde, élément de corbeille) est contrôlé avant de servir de nom de fichier ; « ../../x » et ses variantes sont refusés.
+- **Pièces jointes des notes** : un chemin désigné par un fichier de note ne peut plus sortir du dossier du projet, et seuls les fichiers réellement choisis par l’auteur dans la boîte de dialogue peuvent être copiés dans le projet.
+- **Fenêtres durcies** : aucune ouverture de nouvelle fenêtre, navigation limitée à l’interface (les liens `https://` s’ouvrent dans le navigateur du système), aucune permission web accordée (caméra, position, notifications…), blocage de `webview`.
+- Le document utilisé pour produire le PDF est isolé par sa propre politique de sécurité (aucun script, aucune ressource distante) ; les titres et noms d’auteur y sont échappés.
+
+### Exports
+
+- **Numéros de page** en Word (.docx), OpenDocument (.odt) et PDF : en bas de page, la page de titre est comptée mais reste vierge (la numérotation visible commence à la page 2). Option **Numéroter les pages** dans **Projet → Configuration du document** ; elle est activée par défaut. Désactivez-la si vous préférez numéroter à la mise en page finale.
+- **En-tête courant** facultatif : titre du livre, nom de l’auteur, ou « auteur (pages paires) et titre (pages impaires) ».
+- **Chapitres à ne pas exporter** : le statut « Coupé » n’est plus exporté (réglage modifiable ; « Brouillon » peut aussi être exclu), et chaque chapitre peut être marqué **Exclure de l’export** par son menu contextuel (clic droit). Les sous-chapitres suivent leur parent. Chaque export indique combien de chapitres ont été laissés de côté. *Précision : le champ `excludeFromExport` existait déjà dans le format mais n’était lu que par les statistiques ; il est maintenant respecté par tous les exports, et la page Statistiques calcule les « mots exportés » avec la même sélection que les exports.*
+- **EPUB** : identifiant stable (`urn:uuid:` tiré de l’identifiant du projet), le même livre garde le même identifiant d’une exportation à l’autre ; sommaire imbriqué qui reflète les sous-chapitres ; description et langue du projet ; validé sans aucune erreur ni avertissement par EPUBCheck 5.2.1.
+- **Archives ZIP compressées** (DOCX, ODT, EPUB) : fichiers sensiblement plus petits ; `mimetype` reste stocké en premier et sans compression comme l’exigent EPUB et ODT.
+- **PDF** : césure automatique du texte justifié, selon la langue du document et les dictionnaires du moteur d’impression de la plateforme (l’effet varie donc d’un système à l’autre).
+- **DOCX** : XML écrit dans l’ordre canonique du schéma WordprocessingML (lecteurs stricts) ; titres de chapitre à la taille de leur style au lieu de la taille du corps ; interligne des titres automatique (le titre du livre sur deux lignes n’est plus tassé) ; même correction dans l’ODT.
+- Correction d’un défaut ancien : une mise à jour **partielle** des réglages de page ramenait la page à 5 × 5 cm et les marges à zéro ; une valeur absente ou vide conserve désormais la valeur précédente.
+
+### Tests, intégration continue et documentation
+
+- **Premiers tests automatisés** : `npm test` (50 tests) exécute les vrais gestionnaires du processus principal avec un faux module `electron` et un projet réel en dossier temporaire : comptage et typographie, ZIP, écriture atomique et files exclusives, création et ouverture de projet, enregistrements simultanés, identifiants hostiles, corbeille, notes et pièces jointes, sauvegardes et quotas, copie externe, restauration, historique, exports DOCX, ODT, EPUB, PDF et Markdown. Le test du filtre HTML s’exécute avec `jsdom` (installé par `npm install`) ou, à défaut, avec Chromium ; sans l’un ni l’autre il est signalé comme ignoré.
+- `npm run test:ui` : test de fumée de l’interface complète dans Chromium (Playwright, facultatif) : aucune erreur JavaScript, aucune violation de la politique de sécurité, contenu hostile neutralisé, fermeture avec enregistrement, corbeille, sauvegardes, configuration du document.
+- `npm run check` et `VERIFIER-ECRIVAIN.cmd` couvrent aussi les nouveaux modules ; les scripts de paquetage excluent le dossier `test/`.
+- Intégration continue GitHub (`.github/workflows/ci.yml`) sous Linux et Windows, Node.js 24.
+- Documentation mise à jour : `FORMAT-PROJET.md` (dossier `trash/`, champs `uuid`, `pageNumbers`, `runningHeader`, `exportExcludeStatuses`, `excludeFromExport`, `kind` et `wcv`), `SECURITY.md`, `KNOWN-ISSUES.md` (limites résiduelles), `VERSION.txt` (schéma interne 1.5.0, API d’extensions v3), `BETA-TEST.md` et `RELEASE-CHECKLIST.md`.
+
+### Schéma interne 1.5.0
+
+Champs ajoutés, tous facultatifs et lisibles par la bêta.10 (qui les ignore) : `uuid`, `pageNumbers`, `runningHeader` et `exportExcludeStatuses` dans `project.json` ; `wcv` et `excludeFromExport` dans les chapitres ; `kind` dans `backup.json` ; dossier `trash/`.
+
+### Non traité dans cette version
+
+Collage propre depuis Word, objectifs de mots, mode concentration, thème sombre, palette de commandes, import de documents, étiquettes et fiches par chapitre, suivi des modifications, remplacement de l’analyseur HTML d’export par un analyseur complet, découpage de `main.js` en modules, éditeur ProseMirror/TipTap, resserrement de la politique de sécurité de l’interface (elle exige encore `data:` et `blob:` pour les extensions) : voir `KNOWN-ISSUES.md`.
+
 ## 0.6.0 bêta.10
 
 - Correction de la persistance des formats locaux du manuscrit : les styles inline enregistrés dans les chapitres (police, taille, soulignement, couleur de texte, surlignage, etc.) sont désormais autorisés par la politique de sécurité de l'interface et restent donc visibles après sauvegarde, changement de chapitre ou réouverture du projet.

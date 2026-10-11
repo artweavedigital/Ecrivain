@@ -2,15 +2,28 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell, safeStorage } = requir
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
+const fsSafe = require('./lib/fs-safe');
+const { makeZip } = require('./lib/zip');
+const Text = require('./shared/text-utils');
+const { pathToFileURL } = require('node:url');
+const crypto = require('node:crypto');
 
 let mainWindow = null;
 let currentProjectDir = null;
 
 const PROJECT_FORMAT_ID = 'ecrivain-project';
 const PROJECT_FORMAT_VERSION = 1;
-const PROJECT_SCHEMA_VERSION = '1.4.0';
-const APP_VERSION = '0.6.0-beta.10';
+const PROJECT_SCHEMA_VERSION = '1.5.0';
+const APP_VERSION = '0.6.0-beta.11.1';
 const MAX_RECENT_PROJECTS = 5;
+
+// Réglages d'export et vocabulaire des chapitres.
+const CHAPTER_STATUSES = ['draft', 'writing', 'review', 'final', 'cut'];
+const DEFAULT_EXPORT_EXCLUDED_STATUSES = ['cut'];
+// En-têtes courants : aucun, titre du livre, nom de l'auteur, ou — comme dans
+// l'édition française — nom de l'auteur sur les pages paires et titre sur les impaires.
+const RUNNING_HEADERS = ['none', 'title', 'author', 'author-title'];
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Identité de l'application et verrou d'instance unique.
 // Un second lancement ramène simplement la fenêtre existante au premier plan.
@@ -645,6 +658,7 @@ const DEFAULT_PREFERENCES = Object.freeze({
     startupBehavior: 'welcome',
     defaultProjectsDir: '',
     defaultAuthor: '',
+    externalBackupDir: '',
     recentProjectsLimit: 5,
     autosaveDelayMs: 1800,
     spellcheckEnabled: true,
@@ -678,6 +692,7 @@ function sanitizePreferences(input = {}) {
         startupBehavior,
         defaultProjectsDir: String(input.defaultProjectsDir || '').trim(),
         defaultAuthor: String(input.defaultAuthor || '').trim(),
+        externalBackupDir: String(input.externalBackupDir || '').trim(),
         recentProjectsLimit,
         autosaveDelayMs,
         spellcheckEnabled,
@@ -707,7 +722,7 @@ async function savePreferences(payload = {}) {
     const current = loadPreferencesSync();
     const prefs = sanitizePreferences({ ...current, ...(payload || {}) });
     await fs.mkdir(path.dirname(preferencesFile()), { recursive: true });
-    await fs.writeFile(preferencesFile(), `${JSON.stringify(prefs, null, 2)}\n`, 'utf8');
+    await fsSafe.writeJsonAtomic(preferencesFile(), prefs);
 
     // Nettoyer la liste si l'utilisateur réduit le nombre de projets récents.
     saveRecentProjectsSync(loadRecentProjectsSync().slice(0, prefs.recentProjectsLimit));
@@ -763,6 +778,17 @@ async function pickDefaultProjectsDirectory() {
     const result = await dialog.showOpenDialog(mainWindow, {
         title: 'Choisir le dossier par défaut des projets',
         defaultPath: prefs.defaultProjectsDir || undefined,
+        properties: ['openDirectory', 'createDirectory']
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    return { canceled: false, path: result.filePaths[0] };
+}
+
+async function pickExternalBackupDirectory() {
+    const prefs = loadPreferencesSync();
+    const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Choisir le dossier de sauvegarde externe',
+        defaultPath: prefs.externalBackupDir || undefined,
         properties: ['openDirectory', 'createDirectory']
     });
     if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
@@ -892,10 +918,21 @@ async function readJson(filePath) {
     return JSON.parse(raw);
 }
 
+// Écriture atomique (fichier temporaire unique + fsync + renommage), sérialisée
+// par fichier : deux enregistrements simultanés ne peuvent plus se mélanger.
 async function writeJson(filePath, data) {
-    const tmp = `${filePath}.tmp`;
-    await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-    await fs.rename(tmp, filePath);
+    return fsSafe.writeJsonAtomic(filePath, data);
+}
+
+// Chemins dérivés d'un identifiant : toujours validés, jamais construits à la main.
+function chapterFile(chapterId, projectDir = currentProjectDir) {
+    if (!projectDir) throw new Error('Aucun projet ouvert.');
+    return fsSafe.resolveInside(projectDir, 'chapters', `${fsSafe.safeSegment(chapterId, 'Identifiant de chapitre')}.json`);
+}
+
+function chapterHistoryDir(chapterId, projectDir = currentProjectDir) {
+    if (!projectDir) throw new Error('Aucun projet ouvert.');
+    return fsSafe.resolveInside(projectDir, 'history', fsSafe.safeSegment(chapterId, 'Identifiant de chapitre'));
 }
 
 async function ensureProjectFolders(projectDir) {
@@ -976,7 +1013,7 @@ async function findValidJsonInBackups(projectDir, relativePath) {
 }
 
 async function findValidChapterRecovery(projectDir, chapterId) {
-    const historyDir = path.join(projectDir, 'history', chapterId);
+    const historyDir = chapterHistoryDir(chapterId, projectDir);
     if (fsSync.existsSync(historyDir)) {
         const files = (await fs.readdir(historyDir, { withFileTypes: true }))
             .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
@@ -1007,7 +1044,7 @@ async function findValidChapterRecovery(projectDir, chapterId) {
         }
     }
 
-    const backup = await findValidJsonInBackups(projectDir, path.join('chapters', `${chapterId}.json`));
+    const backup = await findValidJsonInBackups(projectDir, path.join('chapters', `${fsSafe.safeSegment(chapterId, 'Identifiant de chapitre')}.json`));
     if (backup) return { ...backup, kind: 'sauvegarde projet' };
     return null;
 }
@@ -1053,6 +1090,12 @@ function normalizeProjectIdentity(project, projectDir) {
     }
     if (!String(next.language || '').trim()) {
         next.language = 'fr';
+        changed = true;
+    }
+    // Identifiant stable du livre (utilisé par l'EPUB). Champ additif : les anciennes
+    // versions d'Écrivain l'ignorent et le conservent.
+    if (!UUID_PATTERN.test(String(next.uuid || ''))) {
+        next.uuid = crypto.randomUUID();
         changed = true;
     }
     if (!next.createdAt) {
@@ -1160,6 +1203,9 @@ async function validateAndRepairProject(projectDir) {
     }
 
     const chapterDir = path.join(projectDir, 'chapters');
+    await fsSafe.cleanStaleTempFiles(chapterDir);
+    await fsSafe.cleanStaleTempFiles(projectDir);
+    const migratedWordCounts = {};
     const chapterEntries = await fs.readdir(chapterDir, { withFileTypes: true });
     for (const entry of chapterEntries) {
         if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
@@ -1186,6 +1232,16 @@ async function validateAndRepairProject(projectDir) {
                 await writeJson(file, normalizedChapter);
                 report.repaired.push(`chapters/${entry.name} complété avec les champs manquants.`);
             }
+
+            // Migration silencieuse du comptage de mots (méthode unique depuis la bêta.11).
+            // Ce n'est pas une réparation : rien n'est signalé à l'auteur, et les
+            // instantanés de statistiques sont recalés pour ne créer aucun « mot ajouté ».
+            if (normalizedChapter.wcv !== Text.WORD_COUNT_VERSION && typeof normalizedChapter.content === 'string') {
+                normalizedChapter.wordCount = Text.countWordsFromHtml(normalizedChapter.content);
+                normalizedChapter.wcv = Text.WORD_COUNT_VERSION;
+                await writeJson(file, normalizedChapter);
+                migratedWordCounts[normalizedChapter.id || stem] = normalizedChapter.wordCount;
+            }
             if (String(normalizedChapter.id) !== stem) {
                 report.warnings.push(`chapters/${entry.name} : l’identifiant interne (${normalizedChapter.id}) diffère du nom de fichier. Aucun renommage automatique n’a été effectué.`);
             }
@@ -1204,6 +1260,24 @@ async function validateAndRepairProject(projectDir) {
         } else {
             report.warnings.push(`chapters/${entry.name} est illisible. Aucune version récupérable n’a été trouvée ; l’original a été conservé dans recovery.`);
         }
+    }
+
+    if (Object.keys(migratedWordCounts).length) {
+        try {
+            const snapshotFile = path.join(projectDir, 'stats', 'chapter-snapshots.json');
+            if (fsSync.existsSync(snapshotFile)) {
+                await fsSafe.runExclusive(`stats:${projectDir}`, async () => {
+                    const snapshots = await readJsonOrEmpty(snapshotFile);
+                    for (const [chapterId, words] of Object.entries(migratedWordCounts)) {
+                        if (Object.prototype.hasOwnProperty.call(snapshots, chapterId)) snapshots[chapterId] = words;
+                    }
+                    await writeJson(snapshotFile, snapshots);
+                });
+            }
+        } catch (error) {
+            writeDiagnostic('WARN', 'Recalage des statistiques de mots impossible.', error);
+        }
+        writeDiagnostic('INFO', 'Comptage de mots migré vers la méthode unique.', { chapters: Object.keys(migratedWordCounts).length });
     }
 
     // Contrôle des autres données JSON du projet. Si une sauvegarde complète
@@ -1418,14 +1492,23 @@ async function loadCurrentProject() {
 
 
 function numericSetting(value, fallback, min, max) {
-    const parsed = Number(String(value ?? '').replace(',', '.'));
+    // Une valeur absente ou vide garde la valeur de repli (sinon « vide » vaudrait 0 et
+    // ramènerait la page à sa taille minimale).
+    const text = String(value ?? '').trim().replace(',', '.');
+    if (!text) return fallback;
+    const parsed = Number(text);
     if (!Number.isFinite(parsed)) return fallback;
     return Math.min(max, Math.max(min, parsed));
 }
 
-async function updateProjectLayout(settings = {}) {
+function updateProjectLayout(settings = {}) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const projectFile = path.join(currentProjectDir, 'project.json');
+    const projectDir = currentProjectDir;
+    return fsSafe.runExclusive(`project:${projectDir}`, () => updateProjectLayoutNow(settings, projectDir));
+}
+
+async function updateProjectLayoutNow(settings, projectDir) {
+    const projectFile = path.join(projectDir, 'project.json');
     const project = await readJson(projectFile);
 
     // Les dimensions éditoriales sont stockées en unités physiques : cm et mm.
@@ -1442,6 +1525,17 @@ async function updateProjectLayout(settings = {}) {
     project.paragraphSpacingAfterMm = numericSetting(settings.paragraphSpacingAfterMm, Number(project.paragraphSpacingAfterMm || 0), 0, 30);
     if (typeof settings.chapterPageBreak === 'boolean') project.chapterPageBreak = settings.chapterPageBreak;
     else if (project.chapterPageBreak === undefined) project.chapterPageBreak = true;
+
+    // Pagination et sélection des chapitres exportés.
+    if (typeof settings.pageNumbers === 'boolean') project.pageNumbers = settings.pageNumbers;
+    else if (typeof project.pageNumbers !== 'boolean') project.pageNumbers = true;
+    if (RUNNING_HEADERS.includes(settings.runningHeader)) project.runningHeader = settings.runningHeader;
+    else if (!RUNNING_HEADERS.includes(project.runningHeader)) project.runningHeader = 'none';
+    if (Array.isArray(settings.exportExcludeStatuses)) {
+        project.exportExcludeStatuses = [...new Set(settings.exportExcludeStatuses.map(String).filter((value) => CHAPTER_STATUSES.includes(value)))];
+    } else if (!Array.isArray(project.exportExcludeStatuses)) {
+        project.exportExcludeStatuses = [...DEFAULT_EXPORT_EXCLUDED_STATUSES];
+    }
 
     // Typographie commune à tous les exports. On garde aussi les anciennes
     // clés pdfFont/pdfFontSize pour compatibilité avec les projets existants.
@@ -1467,9 +1561,14 @@ async function updateProjectLayout(settings = {}) {
     return project;
 }
 
-async function updateProjectInfo(metadata = {}) {
+function updateProjectInfo(metadata = {}) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const file = path.join(currentProjectDir, 'project.json');
+    const projectDir = currentProjectDir;
+    return fsSafe.runExclusive(`project:${projectDir}`, () => updateProjectInfoNow(metadata, projectDir));
+}
+
+async function updateProjectInfoNow(metadata, projectDir) {
+    const file = path.join(projectDir, 'project.json');
     const project = await readJson(file);
     project.title = String(metadata.title ?? project.title ?? '').trim() || 'Projet';
     project.subtitle = String(metadata.subtitle ?? project.subtitle ?? '').trim();
@@ -1507,6 +1606,7 @@ async function createProject(parentDir, metadata) {
     const stamp = nowString();
     const project = {
         id: safeFolderName(title).toLowerCase().replace(/\s+/g, '-'),
+        uuid: crypto.randomUUID(),
         title,
         subtitle: '',
         author,
@@ -1542,6 +1642,9 @@ async function createProject(parentDir, metadata) {
         paragraphSpacingBeforeMm: 0,
         paragraphSpacingAfterMm: 0,
         chapterPageBreak: true,
+        pageNumbers: true,
+        runningHeader: 'none',
+        exportExcludeStatuses: [...DEFAULT_EXPORT_EXCLUDED_STATUSES],
         pageWidthCm: prefs.newProjectPageWidthCm,
         pageHeightCm: prefs.newProjectPageHeightCm,
         marginTopMm: prefs.newProjectMarginMm,
@@ -1588,14 +1691,22 @@ async function createChapter(title = 'Nouveau chapitre', parent = null) {
         createdAt: stamp,
         updatedAt: stamp
     };
-    await writeJson(path.join(currentProjectDir, 'chapters', `${id}.json`), chapter);
+    await writeJson(chapterFile(id), chapter);
     return chapter;
 }
 
-async function saveChapter(chapter, options = {}) {
+function saveChapter(chapter, options = {}) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
     if (!chapter || !chapter.id) throw new Error('Chapitre invalide.');
-    const existingPath = path.join(currentProjectDir, 'chapters', `${chapter.id}.json`);
+    const projectDir = currentProjectDir;
+    const id = fsSafe.safeSegment(chapter.id, 'Identifiant de chapitre');
+    // Un enregistrement à la fois par chapitre : lecture, historique, écriture et
+    // statistiques forment une séquence qui ne doit jamais s'entrecroiser.
+    return fsSafe.runExclusive(`chapter:${projectDir}:${id}`, () => saveChapterNow(chapter, options));
+}
+
+async function saveChapterNow(chapter, options = {}) {
+    const existingPath = chapterFile(chapter.id);
     let existing = {};
     if (fsSync.existsSync(existingPath)) {
         try { existing = await readJson(existingPath); } catch (_) {}
@@ -1626,9 +1737,9 @@ async function saveChapter(chapter, options = {}) {
         } catch (_) {}
     }
 
+    // Un seul compteur de mots pour toute l'application (voir shared/text-utils.js).
     const html = String(chapter.content || '<p></p>');
-    const plain = html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-    const wordCount = plain ? plain.split(' ').filter(Boolean).length : 0;
+    const wordCount = Text.countWordsFromHtml(html);
 
     const merged = {
         ...existing,
@@ -1638,6 +1749,7 @@ async function saveChapter(chapter, options = {}) {
         status: chapter.status || 'draft',
         content: html,
         wordCount,
+        wcv: Text.WORD_COUNT_VERSION,
         createdAt: existing.createdAt || chapter.createdAt || nowString(),
         updatedAt: nowString()
     };
@@ -1647,9 +1759,14 @@ async function saveChapter(chapter, options = {}) {
     // Statistiques d’écriture : on enregistre uniquement les mots réellement
     // ajoutés depuis la sauvegarde précédente. Une baisse de mots n'est pas
     // retranchée de l'historique quotidien, comme dans le module Zwii.
+    // Si le chapitre a été compté avec l'ancienne méthode, on recompte son état
+    // précédent avec la nouvelle : un changement de méthode ne crée aucun « mot ajouté ».
     if (!options?.skipStats) {
         try {
-            await recordWritingStats(merged, Number(existing.wordCount || 0));
+            const previousWords = existing.content === undefined
+                ? 0
+                : (existing.wcv === Text.WORD_COUNT_VERSION ? Number(existing.wordCount || 0) : Text.countWordsFromHtml(existing.content));
+            await recordWritingStats(merged, previousWords, existing.wcv !== Text.WORD_COUNT_VERSION && existing.content !== undefined);
         } catch (_) {
             // Une erreur de statistiques ne doit jamais empêcher la sauvegarde.
         }
@@ -1660,13 +1777,20 @@ async function saveChapter(chapter, options = {}) {
 
 async function duplicateChapter(chapterId) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const sourcePath = path.join(currentProjectDir, 'chapters', `${chapterId}.json`);
+    const sourcePath = chapterFile(chapterId);
     const source = await readJson(sourcePath);
     const duplicate = await createChapter(`${source.title || 'Chapitre'} — Copie`, source.parent || null);
     duplicate.status = source.status || 'draft';
     duplicate.content = source.content || '<p></p>';
     duplicate.wordCount = Number(source.wordCount || 0);
     return saveChapter(duplicate);
+}
+
+// Marque un chapitre (et donc ses sous-chapitres) comme exclu des exports.
+async function setChapterExcluded(chapterId, excluded) {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const next = await patchChapterMeta(chapterId, { excludeFromExport: excluded === true }, { touch: false });
+    return { id: next.id, excludeFromExport: next.excludeFromExport === true };
 }
 
 async function collectDescendants(chapters, chapterId) {
@@ -1684,12 +1808,120 @@ async function collectDescendants(chapters, chapterId) {
     return [...ids];
 }
 
-async function deleteChapter(chapterId) {
+// -----------------------------------------------------------------------------
+// Mise à jour des métadonnées d'un chapitre (position, parent) sans jamais
+// écraser son texte : on relit le fichier courant sous le verrou du chapitre.
+// -----------------------------------------------------------------------------
+function patchChapterMeta(chapterId, patch = {}, { touch = true } = {}) {
+    const projectDir = currentProjectDir;
+    const id = fsSafe.safeSegment(chapterId, 'Identifiant de chapitre');
+    return fsSafe.runExclusive(`chapter:${projectDir}:${id}`, async () => {
+        const file = chapterFile(id, projectDir);
+        const fresh = await readJson(file);
+        const next = { ...fresh, ...patch };
+        if (touch) next.updatedAt = nowString();
+        await writeJson(file, next);
+        return next;
+    });
+}
+
+// -----------------------------------------------------------------------------
+// Corbeille du projet
+// Supprimer un chapitre ou une note ne détruit plus rien : les fichiers sont
+// déplacés dans trash/<date>-<id>/ avec un manifeste, et peuvent être restaurés
+// depuis Projet → Corbeille. Le dossier trash/ est additif (format de projet v1).
+// -----------------------------------------------------------------------------
+function trashRoot(projectDir = currentProjectDir) {
+    if (!projectDir) throw new Error('Aucun projet ouvert.');
+    return path.join(projectDir, 'trash');
+}
+
+function trashEntryDir(entryId) {
+    return fsSafe.resolveInside(trashRoot(), fsSafe.safeSegment(entryId, 'Élément de corbeille'));
+}
+
+async function moveFileSafe(from, to) {
+    await fs.mkdir(path.dirname(to), { recursive: true });
+    try {
+        await fs.rename(from, to);
+    } catch (error) {
+        if (error?.code !== 'EXDEV') throw error;
+        await fs.copyFile(from, to);
+        await fs.rm(from, { force: true });
+    }
+}
+
+// Pièce jointe d'une note : le chemin enregistré dans la note ne peut désigner
+// qu'un fichier de assets/notes/ à l'intérieur du projet (un projet reçu d'un
+// tiers ne doit pas pouvoir viser un fichier extérieur).
+function noteAssetFile(note) {
+    const relative = String(note?.path || '').replace(/\\/g, '/');
+    if (!relative.startsWith('assets/notes/')) throw new Error('Chemin de pièce jointe invalide.');
+    const file = fsSafe.resolveInside(currentProjectDir, ...relative.split('/'));
+    if (!fsSafe.isInside(path.join(currentProjectDir, 'assets', 'notes'), file)) throw new Error('Chemin de pièce jointe invalide.');
+    return file;
+}
+
+function noteJsonFile(noteId) {
+    const id = normalizeNoteId(noteId);
+    if (!id) throw new Error('Identifiant de note invalide.');
+    return path.join(currentProjectDir, 'notes', `${id}.json`);
+}
+
+async function moveNoteToTrash(noteId, entryDir) {
+    const jsonFile = noteJsonFile(noteId);
+    if (!fsSync.existsSync(jsonFile)) return null;
+    let raw = {};
+    try { raw = await readJson(jsonFile); } catch (_) {}
+    const summary = {
+        id: normalizeNoteId(noteId),
+        title: String(raw.title || 'Note'),
+        chapterId: String(raw.chapterId || ''),
+        type: raw.type === 'file' ? 'file' : 'text',
+        path: raw.type === 'file' ? String(raw.path || '') : '',
+        originalName: String(raw.originalName || '')
+    };
+    if (summary.type === 'file' && summary.path) {
+        try {
+            const asset = noteAssetFile(raw);
+            if (fsSync.existsSync(asset)) await moveFileSafe(asset, path.join(entryDir, 'files', ...summary.path.split('/')));
+        } catch (error) {
+            writeDiagnostic('WARN', 'Pièce jointe de note non déplacée vers la corbeille.', { note: summary.id, message: error.message });
+        }
+    }
+    await moveFileSafe(jsonFile, path.join(entryDir, 'notes', `${summary.id}.json`));
+    return summary;
+}
+
+async function chapterDeletionPreview(chapterId) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    fsSafe.safeSegment(chapterId, 'Identifiant de chapitre');
     const chapters = await listChapters(currentProjectDir);
     const ids = await collectDescendants(chapters, chapterId);
+    const byId = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+    let noteCount = 0;
+    try {
+        const notes = await listNotes();
+        noteCount = notes.filter((note) => note.chapterId && ids.includes(note.chapterId)).length;
+    } catch (_) {}
+    return {
+        chapters: ids.filter((id) => byId.has(id)).length,
+        subchapters: Math.max(0, ids.filter((id) => byId.has(id)).length - 1),
+        notes: noteCount,
+        words: ids.reduce((sum, id) => sum + Number(byId.get(id)?.wordCount || 0), 0)
+    };
+}
 
-    // On mémorise les notes liées AVANT de supprimer les chapitres, sinon leur
+async function deleteChapter(chapterId) {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    fsSafe.safeSegment(chapterId, 'Identifiant de chapitre');
+    const projectDir = currentProjectDir;
+    const chapters = await listChapters(projectDir);
+    const ids = (await collectDescendants(chapters, chapterId)).filter((id) => chapters.some((chapter) => chapter.id === id));
+    if (!ids.length) throw new Error('Chapitre introuvable.');
+    const byId = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+
+    // On mémorise les notes liées AVANT de déplacer les chapitres, sinon leur
     // lien serait normalisé en « livre entier » lors d'une lecture ultérieure.
     let linkedNoteIds = [];
     try {
@@ -1697,18 +1929,212 @@ async function deleteChapter(chapterId) {
         linkedNoteIds = notes.filter((note) => note.chapterId && ids.includes(note.chapterId)).map((note) => note.id);
     } catch (_) {}
 
+    const root = byId.get(chapterId);
+    const entryId = `${compactTimestamp()}-${chapterId}`;
+    const entryDir = trashEntryDir(entryId);
+    await fs.mkdir(entryDir, { recursive: true });
+
+    // Le manifeste est écrit en premier : si l'opération est interrompue, le
+    // contenu déjà déplacé reste identifiable et restaurable.
+    const manifest = {
+        formatVersion: 1,
+        id: entryId,
+        kind: 'chapters',
+        title: String(root?.title || 'Chapitre'),
+        deletedAt: nowString(),
+        rootChapterId: chapterId,
+        chapters: ids.map((id) => ({
+            id,
+            title: String(byId.get(id)?.title || ''),
+            parent: byId.get(id)?.parent || null,
+            position: Number(byId.get(id)?.position || 0),
+            wordCount: Number(byId.get(id)?.wordCount || 0)
+        })),
+        notes: [],
+        wordCount: ids.reduce((sum, id) => sum + Number(byId.get(id)?.wordCount || 0), 0)
+    };
+    await writeJson(path.join(entryDir, 'manifest.json'), manifest);
+
     for (const id of ids) {
-        const file = path.join(currentProjectDir, 'chapters', `${id}.json`);
-        await fs.rm(file, { force: true });
+        await fsSafe.runExclusive(`chapter:${projectDir}:${id}`, () => moveFileSafe(chapterFile(id, projectDir), path.join(entryDir, 'chapters', `${id}.json`)));
     }
 
-    // Comme dans le module Zwii, les notes explicitement liées à un chapitre
-    // supprimé (ou à l'un de ses sous-chapitres) sont supprimées avec lui.
-    // Les notes globales du livre ne sont jamais touchées.
+    // Les notes explicitement liées à un chapitre supprimé (ou à l'un de ses
+    // sous-chapitres) suivent le chapitre ; les notes globales ne sont jamais touchées.
     for (const noteId of linkedNoteIds) {
-        try { await deleteNote(noteId); } catch (_) {}
+        try {
+            const summary = await moveNoteToTrash(noteId, entryDir);
+            if (summary) manifest.notes.push(summary);
+        } catch (error) {
+            writeDiagnostic('WARN', 'Note liée non déplacée vers la corbeille.', { note: noteId, message: error.message });
+        }
     }
+    await writeJson(path.join(entryDir, 'manifest.json'), manifest);
+    writeDiagnostic('INFO', 'Chapitre placé dans la corbeille.', { entry: entryId, chapters: ids.length, notes: manifest.notes.length });
     return ids;
+}
+
+async function listTrashEntries() {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const root = trashRoot();
+    if (!fsSync.existsSync(root)) return [];
+    const items = [];
+    for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(entry.name)) continue;
+        const dir = path.join(root, entry.name);
+        let manifest = null;
+        try { manifest = await readJson(path.join(dir, 'manifest.json')); } catch (_) {}
+        items.push({
+            id: entry.name,
+            kind: manifest?.kind === 'note' ? 'note' : 'chapters',
+            title: String(manifest?.title || entry.name),
+            deletedAt: String(manifest?.deletedAt || ''),
+            chapterCount: Array.isArray(manifest?.chapters) ? manifest.chapters.length : 0,
+            noteCount: Array.isArray(manifest?.notes) ? manifest.notes.length : 0,
+            wordCount: Number(manifest?.wordCount || 0),
+            sizeBytes: await folderSizeBytes(dir),
+            incomplete: !manifest
+        });
+    }
+    items.sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)) || b.id.localeCompare(a.id));
+    return items;
+}
+
+async function trashState() {
+    const items = await listTrashEntries();
+    return { items, totalBytes: items.reduce((sum, item) => sum + item.sizeBytes, 0) };
+}
+
+async function restoreTrashEntry(entryId) {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const projectDir = currentProjectDir;
+    const entryDir = trashEntryDir(entryId);
+    if (!fsSync.existsSync(entryDir)) throw new Error('Élément de corbeille introuvable.');
+    let manifest = {};
+    try { manifest = await readJson(path.join(entryDir, 'manifest.json')); } catch (_) {}
+
+    const restored = { chapters: 0, notes: 0, skipped: [] };
+    const chaptersDir = path.join(entryDir, 'chapters');
+    const trashedIds = new Set();
+    if (fsSync.existsSync(chaptersDir)) {
+        for (const file of await fs.readdir(chaptersDir)) {
+            if (file.toLowerCase().endsWith('.json')) trashedIds.add(path.basename(file, '.json'));
+        }
+    }
+    const existingChapters = await listChapters(projectDir);
+    const existingIds = new Set(existingChapters.map((chapter) => chapter.id));
+
+    for (const id of trashedIds) {
+        const target = chapterFile(id, projectDir);
+        if (fsSync.existsSync(target) || existingIds.has(id)) {
+            restored.skipped.push(`chapitre ${id} (déjà présent)`);
+            continue;
+        }
+        const source = path.join(chaptersDir, `${id}.json`);
+        let chapter = null;
+        try { chapter = await readJson(source); } catch (_) {}
+        if (chapter && typeof chapter === 'object') {
+            // Le parent doit exister (ou être restauré avec lui) ; sinon le chapitre redevient principal.
+            const parent = chapter.parent || null;
+            if (parent && !existingIds.has(parent) && !trashedIds.has(parent)) chapter.parent = null;
+            const siblings = existingChapters.filter((item) => (item.parent || null) === (chapter.parent || null));
+            if (siblings.some((item) => Number(item.position || 0) === Number(chapter.position || 0))) {
+                chapter.position = await nextChapterPosition(projectDir, chapter.parent || null);
+            }
+            chapter.updatedAt = nowString();
+            await writeJson(target, chapter);
+            await fs.rm(source, { force: true });
+        } else {
+            await moveFileSafe(source, target);
+        }
+        existingIds.add(id);
+        existingChapters.push({ id, parent: chapter?.parent || null, position: Number(chapter?.position || 0) });
+        restored.chapters += 1;
+    }
+
+    const notesDir = path.join(entryDir, 'notes');
+    if (fsSync.existsSync(notesDir)) {
+        for (const file of await fs.readdir(notesDir)) {
+            if (!file.toLowerCase().endsWith('.json')) continue;
+            const noteId = normalizeNoteId(path.basename(file, '.json'));
+            if (!noteId) continue;
+            const target = noteJsonFile(noteId);
+            if (fsSync.existsSync(target)) { restored.skipped.push(`note ${noteId} (déjà présente)`); continue; }
+            const source = path.join(notesDir, file);
+            let note = null;
+            try { note = await readJson(source); } catch (_) {}
+            if (note && note.type === 'file' && note.path) {
+                try {
+                    const original = noteAssetFile(note);
+                    const stored = path.join(entryDir, 'files', ...String(note.path).split('/'));
+                    if (fsSync.existsSync(stored)) {
+                        let destination = original;
+                        if (fsSync.existsSync(destination)) {
+                            const parsed = path.parse(original);
+                            destination = path.join(parsed.dir, `${parsed.name}-restaure-${Date.now()}${parsed.ext}`);
+                            note.path = path.posix.join('assets', 'notes', path.basename(destination));
+                        }
+                        await moveFileSafe(stored, destination);
+                    }
+                } catch (error) {
+                    writeDiagnostic('WARN', 'Pièce jointe de note non restaurée.', { note: noteId, message: error.message });
+                }
+            }
+            if (note) { await writeJson(target, note); await fs.rm(source, { force: true }); }
+            else await moveFileSafe(source, target);
+            restored.notes += 1;
+        }
+    }
+
+    if (!restored.skipped.length) await fs.rm(entryDir, { recursive: true, force: true });
+    writeDiagnostic('INFO', 'Élément restauré depuis la corbeille.', { entry: entryId, chapters: restored.chapters, notes: restored.notes, skipped: restored.skipped.length });
+    return { restored, trash: await trashState(), project: await loadCurrentProject() };
+}
+
+async function purgeTrashEntry(entryId) {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const entryDir = trashEntryDir(entryId);
+    const confirm = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Supprimer définitivement',
+        message: 'Supprimer définitivement cet élément de la corbeille ?',
+        detail: 'Cette action est irréversible : le contenu ne pourra plus être restauré.',
+        buttons: ['Annuler', 'Supprimer définitivement'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+    });
+    if (confirm.response !== 1) return { canceled: true, trash: await trashState() };
+    await fs.rm(entryDir, { recursive: true, force: true });
+    return { canceled: false, trash: await trashState() };
+}
+
+async function openTrashFolder() {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const dir = trashRoot();
+    await fs.mkdir(dir, { recursive: true });
+    const result = await shell.openPath(dir);
+    if (result) throw new Error(result);
+    return true;
+}
+
+async function emptyTrash() {
+    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const state = await trashState();
+    if (!state.items.length) return { canceled: false, trash: state };
+    const confirm = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Vider la corbeille',
+        message: `Supprimer définitivement ${state.items.length} élément${state.items.length > 1 ? 's' : ''} ?`,
+        detail: 'Cette action est irréversible : les chapitres et notes de la corbeille ne pourront plus être restaurés.',
+        buttons: ['Annuler', 'Vider la corbeille'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+    });
+    if (confirm.response !== 1) return { canceled: true, trash: state };
+    for (const item of state.items) await fs.rm(trashEntryDir(item.id), { recursive: true, force: true });
+    return { canceled: false, trash: await trashState() };
 }
 
 async function reorderChapters(orderedIds) {
@@ -1733,10 +2159,7 @@ async function reorderChapters(orderedIds) {
 
     for (const siblings of byParent.values()) {
         for (let i = 0; i < siblings.length; i += 1) {
-            const ch = siblings[i];
-            ch.position = i + 1;
-            ch.updatedAt = nowString();
-            await writeJson(path.join(currentProjectDir, 'chapters', `${ch.id}.json`), ch);
+            await patchChapterMeta(siblings[i].id, { position: i + 1 });
         }
     }
 
@@ -1758,8 +2181,7 @@ async function changeChapterLevel(chapterId, direction) {
             .filter((item) => (item.parent || null) === (parentId || null))
             .sort((a, b) => Number(a.position || 0) - Number(b.position || 0));
         for (let index = 0; index < siblings.length; index += 1) {
-            const item = { ...siblings[index], position: index + 1 };
-            await writeJson(path.join(currentProjectDir, 'chapters', `${item.id}.json`), item);
+            await patchChapterMeta(siblings[index].id, { position: index + 1 }, { touch: false });
         }
     }
 
@@ -1774,8 +2196,7 @@ async function changeChapterLevel(chapterId, direction) {
         const newParent = siblings[index - 1];
         chapter.parent = newParent.id;
         chapter.position = await nextChapterPosition(currentProjectDir, newParent.id);
-        chapter.updatedAt = nowString();
-        await writeJson(path.join(currentProjectDir, 'chapters', `${chapter.id}.json`), chapter);
+        await patchChapterMeta(chapter.id, { parent: chapter.parent, position: chapter.position });
         await reindex(oldParent);
         await reindex(newParent.id);
         return flattenTree(await listChapters(currentProjectDir));
@@ -1796,14 +2217,13 @@ async function changeChapterLevel(chapterId, direction) {
         for (const item of upperSiblings) {
             if (Number(item.position || 0) >= targetPosition) {
                 item.position = Number(item.position || 0) + 1;
-                await writeJson(path.join(currentProjectDir, 'chapters', `${item.id}.json`), item);
+                await patchChapterMeta(item.id, { position: item.position }, { touch: false });
             }
         }
 
         chapter.parent = newParent;
         chapter.position = targetPosition;
-        chapter.updatedAt = nowString();
-        await writeJson(path.join(currentProjectDir, 'chapters', `${chapter.id}.json`), chapter);
+        await patchChapterMeta(chapter.id, { parent: chapter.parent, position: chapter.position });
         await reindex(oldParent);
         await reindex(newParent);
         return flattenTree(await listChapters(currentProjectDir));
@@ -1812,39 +2232,19 @@ async function changeChapterLevel(chapterId, direction) {
     throw new Error('Direction de hiérarchie inconnue.');
 }
 
+// Décodage des entités et typographie française : voir shared/text-utils.js
+// (même code dans l'éditeur, les statistiques et les exports).
 function decodeHtmlEntities(text) {
-    return String(text || '')
-        .replace(/&nbsp;/gi, '\u00A0')
-        .replace(/&amp;/gi, '&')
-        .replace(/&lt;/gi, '<')
-        .replace(/&gt;/gi, '>')
-        .replace(/&quot;/gi, '"')
-        .replace(/&#39;/gi, "'")
-        .replace(/&apos;/gi, "'");
+    return Text.decodeEntities(text);
 }
 
-function applyFrenchTypography(text) {
-    let value = String(text || '');
+// Typographie des exports destinés à Word, OpenDocument et Markdown (puis à la mise en page dans XPress,
+// Scribus…) : espace insécable ordinaire (U+00A0) avant « ; ? ! ». L'EPUB, le PDF et le bouton « Typo FR »
+// gardent l'espace fine insécable (U+202F).
+const OFFICE_TYPOGRAPHY = Object.freeze({ narrowSpaces: false });
 
-    // Profil « fr-classique » utilisé par les exports. Le traitement reste
-    // volontairement conservateur : il corrige les espaces typographiques
-    // sans réécrire les dialogues ni transformer automatiquement les guillemets.
-    value = value
-        // Apostrophe typographique entre deux lettres : l'homme -> l’homme.
-        .replace(/([A-Za-zÀ-ÖØ-öø-ÿŒœ])'([A-Za-zÀ-ÖØ-öø-ÿŒœ])/g, '$1’$2')
-        // Points de suspension.
-        .replace(/\.\.\.(?!\.)/g, '…')
-        // Pas d'espace avant virgule ou point.
-        .replace(/[ \t\u00A0\u202F]+([,.])/g, '$1')
-        // Espace fine insécable avant ; ? !
-        .replace(/[ \t\u00A0\u202F]*([;?!])/g, '\u202F$1')
-        // Espace insécable avant deux-points, sauf protocoles/chemins du type ://.
-        .replace(/([^\s:])?[ \t\u00A0\u202F]*:(?!\/)/g, (_m, before = '') => `${before}\u00A0:`)
-        // Espaces insécables à l'intérieur des guillemets français.
-        .replace(/«[ \t\u00A0\u202F]*/g, '«\u202F')
-        .replace(/[ \t\u00A0\u202F]*»/g, '\u202F»');
-
-    return value;
+function applyFrenchTypography(text, options) {
+    return Text.applyFrenchTypography(text, options);
 }
 
 function markdownRuns(runs) {
@@ -1869,8 +2269,8 @@ function markdownRuns(runs) {
     }).join('');
 }
 
-function htmlToMarkdown(html) {
-    const blocks = htmlToBlocks(html);
+function htmlToMarkdown(html, typo) {
+    const blocks = htmlToBlocks(html, typo);
     const lines = [];
     let listType = null;
     let orderedIndex = 0;
@@ -1909,11 +2309,47 @@ function htmlToMarkdown(html) {
     return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-async function exportMarkdown() {
+// -----------------------------------------------------------------------------
+// Sélection des chapitres à exporter
+// Un chapitre n'est pas exporté s'il est marqué « Exclure de l'export » ou si son
+// statut figure dans project.exportExcludeStatuses (par défaut : « Coupé »).
+// Les sous-chapitres d'un chapitre exclu sont exclus avec lui.
+// -----------------------------------------------------------------------------
+function exportExcludedStatuses(project = {}) {
+    const raw = Array.isArray(project.exportExcludeStatuses) ? project.exportExcludeStatuses : DEFAULT_EXPORT_EXCLUDED_STATUSES;
+    return new Set(raw.map((value) => String(value)).filter((value) => CHAPTER_STATUSES.includes(value)));
+}
+
+function selectChaptersForExport(project, chapters) {
+    const statuses = exportExcludedStatuses(project);
+    const kept = [];
+    let excluded = 0;
+    let skipDepth = null;
+    for (const chapter of chapters || []) {
+        const depth = Number(chapter._depth || 0);
+        if (skipDepth !== null) {
+            if (depth > skipDepth) { excluded += 1; continue; }
+            skipDepth = null;
+        }
+        if (chapter.excludeFromExport === true || statuses.has(String(chapter.status || 'draft'))) {
+            excluded += 1;
+            skipDepth = depth;
+            continue;
+        }
+        kept.push(chapter);
+    }
+    return { chapters: kept, excluded };
+}
+
+async function loadExportState() {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
     const state = await loadCurrentProject();
-    const project = state.project;
-    const chapters = state.chapters;
+    const selection = selectChaptersForExport(state.project, state.chapters);
+    return { project: state.project, chapters: selection.chapters, excluded: selection.excluded };
+}
+
+async function exportMarkdown() {
+    const { project, chapters, excluded } = await loadExportState();
     const lines = [];
     lines.push(`# ${project.title || 'Projet'}`);
     if (project.subtitle) lines.push(`\n*${project.subtitle}*`);
@@ -1927,7 +2363,7 @@ async function exportMarkdown() {
         const prefix = '#'.repeat(level);
         lines.push(`${prefix} ${chapter.title || 'Sans titre'}`);
         lines.push('');
-        lines.push(htmlToMarkdown(chapter.content || ''));
+        lines.push(htmlToMarkdown(chapter.content || '', OFFICE_TYPOGRAPHY));
         lines.push('');
     }
 
@@ -1939,7 +2375,7 @@ async function exportMarkdown() {
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     await fs.writeFile(result.filePath, `${lines.join('\n')}\n`, 'utf8');
-    return { canceled: false, filePath: result.filePath };
+    return { canceled: false, filePath: result.filePath, excluded };
 }
 
 
@@ -2200,7 +2636,7 @@ function formattedReplacementHtml(text, spec = {}) {
     return `<span data-ecrivain-format="replace" style="${htmlEscape(style)}">${escaped}</span>`;
 }
 
-function normalizeExportText(value) {
+function normalizeExportText(value, typo) {
     // Les retours à la ligne présents dans le HTML source (indentation, formatage
     // interne de contenteditable, copier-coller) ne sont PAS des sauts de ligne
     // du manuscrit. Comme dans un navigateur, on réduit ces espaces blancs à un
@@ -2208,10 +2644,10 @@ function normalizeExportText(value) {
     const decoded = decodeHtmlEntities(String(value || ''))
         .replace(/\r\n?/g, '\n')
         .replace(/[ \t\n\f\v]+/g, ' ');
-    return applyFrenchTypography(decoded);
+    return applyFrenchTypography(decoded, typo);
 }
 
-function htmlToBlocks(html) {
+function htmlToBlocks(html, typo) {
     const input = String(html || '<p></p>')
         .replace(/\r\n?/g, '\n')
         .replace(/<br\s*\/?>/gi, '<br>');
@@ -2241,7 +2677,7 @@ function htmlToBlocks(html) {
 
     function addText(text, format = {}) {
         if (!current) current = { type: 'paragraph', runs: [], listType: null };
-        let clean = normalizeExportText(text);
+        let clean = normalizeExportText(text, typo);
         if (!clean) return;
 
         // En HTML, les blancs ordinaires en début d'un élément de bloc ne sont
@@ -2389,10 +2825,10 @@ function renderBlocksHtml(blocks) {
     return out.join('\n');
 }
 
-function chapterExportTitle(project, chapter, chapterNo) {
+function chapterExportTitle(project, chapter, chapterNo, typo) {
     // Les titres de chapitres sont exportés tels qu'ils ont été saisis.
     // La numérotation de l'interface ne doit pas ajouter un chiffre devant le titre.
-    return normalizeExportText(chapter.title || 'Sans titre');
+    return normalizeExportText(chapter.title || 'Sans titre', typo);
 }
 
 function projectExportSettings(project) {
@@ -2409,115 +2845,60 @@ function projectExportSettings(project) {
         font: String(project.exportFont || 'Garamond').trim() || 'Garamond',
         fontSizePt: numericSetting(project.exportFontSizePt, 11, 7, 30),
         lineSpacingPt: numericSetting(project.lineSpacingPt, 13, 8, 60),
-        chapterPageBreak: project.chapterPageBreak !== false
+        chapterPageBreak: project.chapterPageBreak !== false,
+        frontPage: project.frontPage !== false,
+        pageNumbers: project.pageNumbers !== false,
+        runningHeader: RUNNING_HEADERS.includes(project.runningHeader) ? project.runningHeader : 'none'
     };
+}
+
+function runningHeaderTexts(project, s, typo) {
+    const title = normalizeExportText(project.title || '', typo);
+    const author = normalizeExportText(project.author || '', typo);
+    if (s.runningHeader === 'title') return { odd: title, even: title, mirrored: false };
+    if (s.runningHeader === 'author') return { odd: author, even: author, mirrored: false };
+    if (s.runningHeader === 'author-title') return { odd: title, even: author, mirrored: true };
+    return { odd: '', even: '', mirrored: false };
+}
+
+// Distance entre le bord de la page et l'en-tête ou le pied de page (en mm) :
+// 40 % de la marge, en laissant au moins 5 mm pour la ligne elle-même.
+function headerFooterEdgeMm(marginMm) {
+    return Math.max(0, Math.min(Number(marginMm) * 0.4, Number(marginMm) - 5));
+}
+
+// Échappe un texte pour l'insérer dans une chaîne CSS « content: "…" ».
+function cssString(value) {
+    return String(value ?? '')
+        .replace(/[\\"]/g, (c) => `\\${c}`)
+        .replace(/</g, '\\3C ')
+        .replace(/[\r\n]+/g, ' ');
 }
 
 function cmToTwips(cm) { return Math.round(Number(cm) * 566.9291339); }
 function mmToTwips(mm) { return Math.round(Number(mm) * 56.69291339); }
 function mmToCm(mm) { return Number(mm) / 10; }
 
-const CRC32_TABLE = (() => {
-    const table = new Uint32Array(256);
-    for (let n = 0; n < 256; n += 1) {
-        let c = n;
-        for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-        table[n] = c >>> 0;
-    }
-    return table;
-})();
-
-function crc32(buffer) {
-    let crc = 0xFFFFFFFF;
-    for (const byte of buffer) crc = CRC32_TABLE[(crc ^ byte) & 0xFF] ^ (crc >>> 8);
-    return (crc ^ 0xFFFFFFFF) >>> 0;
-}
-
-function dosDateTime(date = new Date()) {
-    const year = Math.max(1980, date.getFullYear());
-    const time = ((date.getHours() & 0x1F) << 11) | ((date.getMinutes() & 0x3F) << 5) | ((Math.floor(date.getSeconds() / 2)) & 0x1F);
-    const day = ((year - 1980) << 9) | (((date.getMonth() + 1) & 0x0F) << 5) | (date.getDate() & 0x1F);
-    return { time, day };
-}
-
-function makeZip(entries) {
-    const locals = [];
-    const centrals = [];
-    let offset = 0;
-    const stamp = dosDateTime();
-    for (const entry of entries) {
-        const name = Buffer.from(String(entry.name).replace(/\\/g, '/'), 'utf8');
-        const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data), 'utf8');
-        const crc = crc32(data);
-        const flags = 0x0800;
-        const method = 0; // Stockage sans compression : simple, robuste et valide pour DOCX/ODT/EPUB.
-        const local = Buffer.alloc(30);
-        local.writeUInt32LE(0x04034b50, 0);
-        local.writeUInt16LE(20, 4);
-        local.writeUInt16LE(flags, 6);
-        local.writeUInt16LE(method, 8);
-        local.writeUInt16LE(stamp.time, 10);
-        local.writeUInt16LE(stamp.day, 12);
-        local.writeUInt32LE(crc, 14);
-        local.writeUInt32LE(data.length, 18);
-        local.writeUInt32LE(data.length, 22);
-        local.writeUInt16LE(name.length, 26);
-        local.writeUInt16LE(0, 28);
-        locals.push(local, name, data);
-
-        const central = Buffer.alloc(46);
-        central.writeUInt32LE(0x02014b50, 0);
-        central.writeUInt16LE(20, 4);
-        central.writeUInt16LE(20, 6);
-        central.writeUInt16LE(flags, 8);
-        central.writeUInt16LE(method, 10);
-        central.writeUInt16LE(stamp.time, 12);
-        central.writeUInt16LE(stamp.day, 14);
-        central.writeUInt32LE(crc, 16);
-        central.writeUInt32LE(data.length, 20);
-        central.writeUInt32LE(data.length, 24);
-        central.writeUInt16LE(name.length, 28);
-        central.writeUInt16LE(0, 30);
-        central.writeUInt16LE(0, 32);
-        central.writeUInt16LE(0, 34);
-        central.writeUInt16LE(0, 36);
-        central.writeUInt32LE(0, 38);
-        central.writeUInt32LE(offset, 42);
-        centrals.push(central, name);
-        offset += local.length + name.length + data.length;
-    }
-    const centralBuffer = Buffer.concat(centrals);
-    const end = Buffer.alloc(22);
-    end.writeUInt32LE(0x06054b50, 0);
-    end.writeUInt16LE(0, 4);
-    end.writeUInt16LE(0, 6);
-    end.writeUInt16LE(entries.length, 8);
-    end.writeUInt16LE(entries.length, 10);
-    end.writeUInt32LE(centralBuffer.length, 12);
-    end.writeUInt32LE(offset, 16);
-    end.writeUInt16LE(0, 20);
-    return Buffer.concat([...locals, centralBuffer, end]);
-}
+// Fabrication des archives ZIP (DOCX, ODT, EPUB, diagnostic) : voir lib/zip.js.
 
 function docxRunXml(run, settings) {
     const runFont = String(run.fontFamily || settings.font || 'Garamond').replace(/["']/g, '').trim() || settings.font;
     const runSize = run.fontSizePt !== null && run.fontSizePt !== undefined && run.fontSizePt !== '' && Number.isFinite(Number(run.fontSizePt)) ? Number(run.fontSizePt) : settings.fontSizePt;
-    const props = [
-        `<w:rFonts w:ascii="${xmlEscape(runFont)}" w:hAnsi="${xmlEscape(runFont)}" w:cs="${xmlEscape(runFont)}"/>`,
-        `<w:sz w:val="${Math.round(runSize * 2)}"/>`,
-        `<w:szCs w:val="${Math.round(runSize * 2)}"/>`,
-        '<w:lang w:val="fr-FR"/>'
-    ];
+    // Ordre canonique de WordprocessingML (rFonts, b, i, strike, color, sz, u, shd, vertAlign, lang) :
+    // certains lecteurs stricts refusent un ordre différent.
+    const props = [`<w:rFonts w:ascii="${xmlEscape(runFont)}" w:hAnsi="${xmlEscape(runFont)}" w:cs="${xmlEscape(runFont)}"/>`];
     if (run.bold) props.push('<w:b/>');
     if (run.italic) props.push('<w:i/>');
-    if (run.underline) props.push('<w:u w:val="single"/>');
     if (run.strike) props.push('<w:strike/>');
-    if (run.superscript) props.push('<w:vertAlign w:val="superscript"/>');
-    if (run.subscript) props.push('<w:vertAlign w:val="subscript"/>');
     const color = cssColorToHex(run.color);
     if (color && /^#[0-9a-f]{6}$/i.test(color)) props.push(`<w:color w:val="${color.slice(1).toUpperCase()}"/>`);
+    props.push(`<w:sz w:val="${Math.round(runSize * 2)}"/>`, `<w:szCs w:val="${Math.round(runSize * 2)}"/>`);
+    if (run.underline) props.push('<w:u w:val="single"/>');
     const background = cssColorToHex(run.backgroundColor);
     if (background && /^#[0-9a-f]{6}$/i.test(background)) props.push(`<w:shd w:val="clear" w:color="auto" w:fill="${background.slice(1).toUpperCase()}"/>`);
+    if (run.superscript) props.push('<w:vertAlign w:val="superscript"/>');
+    if (run.subscript) props.push('<w:vertAlign w:val="subscript"/>');
+    props.push('<w:lang w:val="fr-FR"/>');
     const rPr = `<w:rPr>${props.join('')}</w:rPr>`;
     return String(run.text || '').split('\n').map((part, index) => {
         const br = index > 0 ? '<w:br/>' : '';
@@ -2534,30 +2915,46 @@ function docxParagraphXml(block, settings, options = {}) {
     if (block.type === 'list-item') style = 'ListParagraph';
     if (options.chapterTitle) style = 'Heading1';
 
+    // Ordre imposé par le schéma WordprocessingML : pStyle, pageBreakBefore, spacing, ind, jc.
     const pPr = [`<w:pStyle w:val="${style}"/>`];
     if (options.pageBreakBefore) pPr.push('<w:pageBreakBefore/>');
 
     // Les propriétés essentielles sont écrites directement sur les paragraphes
     // du corps, en plus du style Normal. Word et LibreOffice ne peuvent donc
     // pas les remplacer par leurs propres styles par défaut.
+    const spacing = `<w:spacing w:before="${mmToTwips(settings.beforeMm)}" w:after="${mmToTwips(settings.afterMm)}" w:line="${Math.round(settings.lineSpacingPt * 20)}" w:lineRule="exact"/>`;
     if (style === 'Normal') {
-        pPr.push('<w:jc w:val="both"/>');
+        pPr.push(spacing);
         pPr.push(`<w:ind w:firstLine="${mmToTwips(settings.indentMm)}"/>`);
-        pPr.push(`<w:spacing w:before="${mmToTwips(settings.beforeMm)}" w:after="${mmToTwips(settings.afterMm)}" w:line="${Math.round(settings.lineSpacingPt * 20)}" w:lineRule="exact"/>`);
+        pPr.push('<w:jc w:val="both"/>');
     } else if (style === 'Quote') {
-        pPr.push('<w:jc w:val="both"/>');
+        pPr.push(spacing);
         pPr.push(`<w:ind w:left="${mmToTwips(settings.indentMm)}" w:right="${mmToTwips(settings.indentMm)}" w:firstLine="0"/>`);
-        pPr.push(`<w:spacing w:before="${mmToTwips(settings.beforeMm)}" w:after="${mmToTwips(settings.afterMm)}" w:line="${Math.round(settings.lineSpacingPt * 20)}" w:lineRule="exact"/>`);
-    } else if (style === 'ListParagraph') {
         pPr.push('<w:jc w:val="both"/>');
+    } else if (style === 'ListParagraph') {
+        pPr.push(spacing);
         pPr.push(`<w:ind w:left="${mmToTwips(settings.indentMm)}" w:firstLine="0"/>`);
-        pPr.push(`<w:spacing w:before="${mmToTwips(settings.beforeMm)}" w:after="${mmToTwips(settings.afterMm)}" w:line="${Math.round(settings.lineSpacingPt * 20)}" w:lineRule="exact"/>`);
+        pPr.push('<w:jc w:val="both"/>');
     }
 
     const prefix = block.type === 'list-item' ? (block.listType === 'ol' ? `${options.listIndex || 1}. ` : '• ') : '';
     const prefixRun = prefix ? docxRunXml({ text: prefix }, settings) : '';
     const runs = prefixRun + (block.runs || []).map((run) => docxRunXml(run, settings)).join('');
     return `<w:p><w:pPr>${pPr.join('')}</w:pPr>${runs || docxRunXml({ text: '' }, settings)}</w:p>`;
+}
+
+const DOCX_NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const DOCX_NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+function docxHeaderFooterXml(kind, text, s) {
+    const tag = kind === 'header' ? 'w:hdr' : 'w:ftr';
+    const style = kind === 'header' ? 'Header' : 'Footer';
+    const font = xmlEscape(s.font);
+    const rPr = `<w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/>${kind === 'header' ? '<w:i/>' : ''}<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>`;
+    const content = kind === 'header'
+        ? (text ? `<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>` : '')
+        : `<w:r>${rPr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${rPr}<w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r>${rPr}<w:fldChar w:fldCharType="separate"/></w:r><w:r>${rPr}<w:t>1</w:t></w:r><w:r>${rPr}<w:fldChar w:fldCharType="end"/></w:r>`;
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<${tag} xmlns:w="${DOCX_NS_W}" xmlns:r="${DOCX_NS_R}"><w:p><w:pPr><w:pStyle w:val="${style}"/></w:pPr>${content}</w:p></${tag}>`;
 }
 
 function buildDocx(project, chapters) {
@@ -2575,58 +2972,106 @@ function buildDocx(project, chapters) {
     const line = Math.round(s.lineSpacingPt * 20);
     const font = xmlEscape(s.font);
 
+    // En-têtes et numéros de page. La page de titre est comptée mais n'affiche rien.
+    const headers = runningHeaderTexts(project, s, OFFICE_TYPOGRAPHY);
+    const hasHeader = Boolean(headers.odd || headers.even);
+    const hasFooter = s.pageNumbers;
+    const titlePg = s.frontPage && (hasHeader || hasFooter);
+    const parts = []; // { file, rId, kind, slot, xml }
+    if (hasHeader) {
+        parts.push({ file: 'header1.xml', rId: 'rIdHdr1', kind: 'header', slot: 'default', xml: docxHeaderFooterXml('header', headers.odd, s) });
+        if (headers.mirrored) parts.push({ file: 'header2.xml', rId: 'rIdHdr2', kind: 'header', slot: 'even', xml: docxHeaderFooterXml('header', headers.even, s) });
+    }
+    if (hasFooter) {
+        parts.push({ file: 'footer1.xml', rId: 'rIdFtr1', kind: 'footer', slot: 'default', xml: docxHeaderFooterXml('footer', '', s) });
+        if (headers.mirrored) parts.push({ file: 'footer2.xml', rId: 'rIdFtr2', kind: 'footer', slot: 'even', xml: docxHeaderFooterXml('footer', '', s) });
+    }
+
     const body = [];
-    if (project.frontPage !== false) {
-        body.push(`<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr>${docxRunXml({ text: normalizeExportText(project.title || 'Projet'), bold: true }, { ...s, fontSizePt: 18 })}</w:p>`);
-        if (project.subtitle) body.push(`<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr>${docxRunXml({ text: normalizeExportText(project.subtitle), italic: true }, { ...s, fontSizePt: 13 })}</w:p>`);
-        if (project.author) body.push(`<w:p><w:pPr><w:pStyle w:val="Author"/></w:pPr>${docxRunXml({ text: normalizeExportText(project.author) }, s)}</w:p>`);
+    if (s.frontPage) {
+        body.push(`<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr>${docxRunXml({ text: normalizeExportText(project.title || 'Projet', OFFICE_TYPOGRAPHY), bold: true }, { ...s, fontSizePt: 18 })}</w:p>`);
+        if (project.subtitle) body.push(`<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr>${docxRunXml({ text: normalizeExportText(project.subtitle, OFFICE_TYPOGRAPHY), italic: true }, { ...s, fontSizePt: 13 })}</w:p>`);
+        if (project.author) body.push(`<w:p><w:pPr><w:pStyle w:val="Author"/></w:pPr>${docxRunXml({ text: normalizeExportText(project.author, OFFICE_TYPOGRAPHY) }, s)}</w:p>`);
     }
     let rootNo = 0;
     for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex += 1) {
         const chapter = chapters[chapterIndex];
         const root = Number(chapter._depth || 0) === 0;
         if (root) rootNo += 1;
-        const title = chapterExportTitle(project, chapter, rootNo);
-        const pageBreakBefore = s.chapterPageBreak && (chapterIndex > 0 || project.frontPage !== false);
-        body.push(docxParagraphXml({ type: 'heading1', runs: [{ text: title, bold: true }] }, s, { chapterTitle: true, pageBreakBefore }));
+        const title = chapterExportTitle(project, chapter, rootNo, OFFICE_TYPOGRAPHY);
+        const pageBreakBefore = s.chapterPageBreak && (chapterIndex > 0 || s.frontPage);
+        // Taille posée sur le texte : sinon la taille du corps l'emporterait sur celle du style de titre.
+        body.push(docxParagraphXml({ type: 'heading1', runs: [{ text: title, bold: true, fontSizePt: root ? 15 : 13 }] }, s, { chapterTitle: true, pageBreakBefore }));
         let listIndex = 0;
-        for (const block of htmlToBlocks(chapter.content || '')) {
+        for (const block of htmlToBlocks(chapter.content || '', OFFICE_TYPOGRAPHY)) {
             if (block.type === 'list-item' && block.listType === 'ol') listIndex += 1;
             else if (block.type !== 'list-item') listIndex = 0;
             body.push(docxParagraphXml(block, s, { listIndex }));
         }
     }
-    body.push(`<w:sectPr><w:pgSz w:w="${pageW}" w:h="${pageH}"/><w:pgMar w:top="${marginTop}" w:right="${marginRight}" w:bottom="${marginBottom}" w:left="${marginLeft}" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>`);
 
-    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body.join('')}</w:body></w:document>`;
+    const headerEdge = hasHeader ? mmToTwips(headerFooterEdgeMm(s.topMm)) : 0;
+    const footerEdge = hasFooter ? mmToTwips(headerFooterEdgeMm(s.bottomMm)) : 0;
+    const references = parts
+        .slice()
+        .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'header' ? -1 : 1))
+        .map((part) => `<w:${part.kind}Reference w:type="${part.slot}" r:id="${part.rId}"/>`)
+        .join('');
+    body.push(`<w:sectPr>${references}<w:pgSz w:w="${pageW}" w:h="${pageH}"/><w:pgMar w:top="${marginTop}" w:right="${marginRight}" w:bottom="${marginBottom}" w:left="${marginLeft}" w:header="${headerEdge}" w:footer="${footerEdge}" w:gutter="0"/>${titlePg ? '<w:titlePg/>' : ''}</w:sectPr>`);
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="${DOCX_NS_W}" xmlns:r="${DOCX_NS_R}"><w:body>${body.join('')}</w:body></w:document>`;
+
+    // Les propriétés de paragraphe suivent l'ordre du schéma : keepNext, spacing, ind, jc.
     const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:styles xmlns:w="${DOCX_NS_W}">
 <w:docDefaults>
 <w:rPrDefault><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/><w:lang w:val="fr-FR"/></w:rPr></w:rPrDefault>
-<w:pPrDefault><w:pPr><w:jc w:val="both"/><w:ind w:firstLine="${indent}"/><w:spacing w:before="${before}" w:after="${after}" w:line="${line}" w:lineRule="exact"/></w:pPr></w:pPrDefault>
+<w:pPrDefault><w:pPr><w:spacing w:before="${before}" w:after="${after}" w:line="${line}" w:lineRule="exact"/><w:ind w:firstLine="${indent}"/><w:jc w:val="both"/></w:pPr></w:pPrDefault>
 </w:docDefaults>
-<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:jc w:val="both"/><w:ind w:firstLine="${indent}"/><w:spacing w:before="${before}" w:after="${after}" w:line="${line}" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/><w:lang w:val="fr-FR"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Titre"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:ind w:firstLine="0"/><w:spacing w:before="0" w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Sous-titre"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:ind w:firstLine="0"/></w:pPr><w:rPr><w:i/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Author"><w:name w:val="Auteur"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:ind w:firstLine="0"/><w:spacing w:before="240" w:after="0"/></w:pPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Titre 1"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:ind w:firstLine="0"/><w:spacing w:before="0" w:after="240"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Titre 2"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:ind w:firstLine="0"/><w:spacing w:before="180" w:after="120"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Titre 3"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:ind w:firstLine="0"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="Titre 4"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:ind w:firstLine="0"/><w:keepNext/></w:pPr><w:rPr><w:b/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Citation"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="both"/><w:ind w:left="${indent}" w:right="${indent}" w:firstLine="0"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="Liste"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="both"/><w:ind w:left="${indent}" w:firstLine="0"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="${before}" w:after="${after}" w:line="${line}" w:lineRule="exact"/><w:ind w:firstLine="${indent}"/><w:jc w:val="both"/></w:pPr><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/><w:lang w:val="fr-FR"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Titre"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="240" w:line="264" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Sous-titre"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="264" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr><w:rPr><w:i/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Author"><w:name w:val="Auteur"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="240" w:after="0"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Titre 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="240" w:line="264" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Titre 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="180" w:after="120" w:line="264" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="Titre 3"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0" w:line="264" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="Titre 4"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:ind w:firstLine="0"/><w:jc w:val="left"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Citation"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="${indent}" w:right="${indent}" w:firstLine="0"/><w:jc w:val="both"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="Liste"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="${indent}" w:firstLine="0"/><w:jc w:val="both"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Header"><w:name w:val="En-tête"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr><w:rPr><w:i/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="Pied de page"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr><w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
 </w:styles>`;
     const coreXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xmlEscape(project.title || '')}</dc:title><dc:creator>${xmlEscape(project.author || '')}</dc:creator><dc:language>fr-FR</dc:language><dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created></cp:coreProperties>`;
-    return makeZip([
-        { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>` },
-        { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>` },
+
+    const wmlType = 'application/vnd.openxmlformats-officedocument.wordprocessingml';
+    const overrides = [
+        `<Override PartName="/word/document.xml" ContentType="${wmlType}.document.main+xml"/>`,
+        `<Override PartName="/word/styles.xml" ContentType="${wmlType}.styles+xml"/>`,
+        ...(headers.mirrored ? [`<Override PartName="/word/settings.xml" ContentType="${wmlType}.settings+xml"/>`] : []),
+        ...parts.map((part) => `<Override PartName="/word/${part.file}" ContentType="${wmlType}.${part.kind}+xml"/>`),
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+    ];
+    const relBase = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const documentRels = [
+        // Ce lien manquait dans les premières versions : sans lui Word/LibreOffice
+        // pouvaient ignorer styles.xml et utiliser leur propre Normal.
+        `<Relationship Id="rIdStyles" Type="${relBase}/styles" Target="styles.xml"/>`,
+        ...(headers.mirrored ? [`<Relationship Id="rIdSettings" Type="${relBase}/settings" Target="settings.xml"/>`] : []),
+        ...parts.map((part) => `<Relationship Id="${part.rId}" Type="${relBase}/${part.kind}" Target="${part.file}"/>`)
+    ];
+    const entries = [
+        { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides.join('')}</Types>` },
+        { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relBase}/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>` },
         { name: 'word/document.xml', data: documentXml },
         { name: 'word/styles.xml', data: stylesXml },
-        // Ce lien manquait dans la version précédente : sans lui Word/LibreOffice
-        // pouvaient ignorer styles.xml et utiliser leur propre Normal.
-        { name: 'word/_rels/document.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
-        { name: 'docProps/core.xml', data: coreXml }
-    ]);
+        { name: 'word/_rels/document.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${documentRels.join('')}</Relationships>` }
+    ];
+    if (headers.mirrored) {
+        entries.push({ name: 'word/settings.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings xmlns:w="${DOCX_NS_W}"><w:evenAndOddHeaders/></w:settings>` });
+    }
+    for (const part of parts) entries.push({ name: `word/${part.file}`, data: part.xml });
+    entries.push({ name: 'docProps/core.xml', data: coreXml });
+    return makeZip(entries);
 }
 
 function createOdtTextStyleRegistry(defaultSettings) {
@@ -2691,20 +3136,20 @@ function buildOdt(project, chapters) {
     const fontFaceName = 'ManuscriptFont';
     const body = [];
     const odtTextStyles = createOdtTextStyleRegistry(s);
-    if (project.frontPage !== false) {
-        body.push(`<text:p text:style-name="Title">${xmlEscape(normalizeExportText(project.title || 'Projet'))}</text:p>`);
-        if (project.subtitle) body.push(`<text:p text:style-name="Subtitle">${xmlEscape(normalizeExportText(project.subtitle))}</text:p>`);
-        if (project.author) body.push(`<text:p text:style-name="Author">${xmlEscape(normalizeExportText(project.author))}</text:p>`);
+    if (s.frontPage) {
+        body.push(`<text:p text:style-name="Title">${xmlEscape(normalizeExportText(project.title || 'Projet', OFFICE_TYPOGRAPHY))}</text:p>`);
+        if (project.subtitle) body.push(`<text:p text:style-name="Subtitle">${xmlEscape(normalizeExportText(project.subtitle, OFFICE_TYPOGRAPHY))}</text:p>`);
+        if (project.author) body.push(`<text:p text:style-name="Author">${xmlEscape(normalizeExportText(project.author, OFFICE_TYPOGRAPHY))}</text:p>`);
     }
     let rootNo = 0;
     for (const chapter of chapters) {
         const root = Number(chapter._depth || 0) === 0;
         if (root) rootNo += 1;
-        const title = chapterExportTitle(project, chapter, rootNo);
+        const title = chapterExportTitle(project, chapter, rootNo, OFFICE_TYPOGRAPHY);
         const chapterTitleStyle = root ? 'ChapterTitle' : 'SubchapterTitle';
         body.push(`<text:h text:style-name="${chapterTitleStyle}" text:outline-level="${Math.min(6, Number(chapter._depth || 0) + 1)}">${xmlEscape(title)}</text:h>`);
         let listCounter = 0;
-        for (const block of htmlToBlocks(chapter.content || '')) {
+        for (const block of htmlToBlocks(chapter.content || '', OFFICE_TYPOGRAPHY)) {
             if (block.type === 'list-item') {
                 listCounter += 1;
                 const prefix = block.listType === 'ol' ? `${listCounter}. ` : '• ';
@@ -2720,6 +3165,35 @@ function buildOdt(project, chapters) {
         }
     }
     const textStyles = odtTextStyles.xml();
+
+    // En-têtes et numéros de page : la hauteur totale reste égale à la marge choisie,
+    // de sorte que la zone de texte garde les mêmes dimensions avec ou sans numéros.
+    const headers = runningHeaderTexts(project, s, OFFICE_TYPOGRAPHY);
+    const hasHeader = Boolean(headers.odd || headers.even);
+    const hasFooter = s.pageNumbers;
+    const firstDistinct = s.frontPage && (hasHeader || hasFooter);
+    const bandMm = 4;
+    const topEdge = hasHeader ? headerFooterEdgeMm(s.topMm) : s.topMm;
+    const bottomEdge = hasFooter ? headerFooterEdgeMm(s.bottomMm) : s.bottomMm;
+    const headerStyleXml = hasHeader
+        ? `<style:header-style><style:header-footer-properties fo:min-height="${mmToCm(bandMm)}cm" fo:margin-bottom="${mmToCm(Math.max(0, s.topMm - topEdge - bandMm))}cm"/></style:header-style>`
+        : '';
+    const footerStyleXml = hasFooter
+        ? `<style:footer-style><style:header-footer-properties fo:min-height="${mmToCm(bandMm)}cm" fo:margin-top="${mmToCm(Math.max(0, s.bottomMm - bottomEdge - bandMm))}cm"/></style:footer-style>`
+        : '';
+    const headerParagraph = (text) => `<text:p text:style-name="Header">${xmlEscape(text)}</text:p>`;
+    const footerParagraph = '<text:p text:style-name="Footer"><text:page-number text:select-page="current">1</text:page-number></text:p>';
+    const masterParts = [];
+    if (hasHeader) {
+        masterParts.push(`<style:header>${headerParagraph(headers.odd)}</style:header>`);
+        if (headers.mirrored) masterParts.push(`<style:header-left>${headerParagraph(headers.even)}</style:header-left>`);
+        if (firstDistinct) masterParts.push('<style:header-first><text:p text:style-name="Header"/></style:header-first>');
+    }
+    if (hasFooter) {
+        masterParts.push(`<style:footer>${footerParagraph}</style:footer>`);
+        if (headers.mirrored) masterParts.push(`<style:footer-left>${footerParagraph}</style:footer-left>`);
+        if (firstDistinct) masterParts.push('<style:footer-first><text:p text:style-name="Footer"/></style:footer-first>');
+    }
     const contentXml = `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="${fontFaceName}" svg:font-family="'${xmlEscape(fontFamily)}'" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"/></office:font-face-decls><office:automatic-styles>${textStyles}</office:automatic-styles><office:body><office:text>${body.join('')}</office:text></office:body></office:document-content>`;
     const bodyParagraph = `<style:paragraph-properties fo:text-align="justify" fo:text-indent="${mmToCm(s.indentMm)}cm" fo:margin-top="${mmToCm(s.beforeMm)}cm" fo:margin-bottom="${mmToCm(s.afterMm)}cm" fo:line-height="${s.lineSpacingPt}pt"/>`;
@@ -2730,17 +3204,19 @@ function buildOdt(project, chapters) {
 <office:styles>
 <style:default-style style:family="paragraph">${bodyParagraph}${bodyText}</style:default-style>
 <style:style style:name="Body" style:family="paragraph">${bodyParagraph}${bodyText}</style:style>
-<style:style style:name="Title" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm" fo:margin-bottom="0.5cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="18pt" fo:font-weight="bold"/></style:style>
-<style:style style:name="Subtitle" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="13pt" fo:font-style="italic"/></style:style>
+<style:style style:name="Title" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm" fo:margin-bottom="0.5cm" fo:line-height="115%"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="18pt" fo:font-weight="bold"/></style:style>
+<style:style style:name="Subtitle" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm" fo:line-height="115%"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="13pt" fo:font-style="italic"/></style:style>
 <style:style style:name="Author" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm" fo:margin-top="0.5cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="${s.fontSizePt}pt"/></style:style>
-<style:style style:name="ChapterTitle" style:family="paragraph"><style:paragraph-properties${s.chapterPageBreak ? ' fo:break-before="page"' : ''} fo:text-align="center" fo:text-indent="0cm" fo:margin-bottom="0.5cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="15pt" fo:font-weight="bold"/></style:style>
-<style:style style:name="SubchapterTitle" style:family="paragraph"><style:paragraph-properties${s.chapterPageBreak ? ' fo:break-before="page"' : ''} fo:text-align="left" fo:text-indent="0cm" fo:margin-top="0.4cm" fo:margin-bottom="0.2cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="13pt" fo:font-weight="bold"/></style:style>
-<style:style style:name="Heading2" style:family="paragraph"><style:paragraph-properties fo:text-align="left" fo:text-indent="0cm" fo:margin-top="0.4cm" fo:margin-bottom="0.2cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="13pt" fo:font-weight="bold"/></style:style>
+<style:style style:name="ChapterTitle" style:family="paragraph"><style:paragraph-properties${s.chapterPageBreak ? ' fo:break-before="page"' : ''} fo:text-align="center" fo:text-indent="0cm" fo:margin-bottom="0.5cm" fo:line-height="115%"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="15pt" fo:font-weight="bold"/></style:style>
+<style:style style:name="SubchapterTitle" style:family="paragraph"><style:paragraph-properties${s.chapterPageBreak ? ' fo:break-before="page"' : ''} fo:text-align="left" fo:text-indent="0cm" fo:margin-top="0.4cm" fo:margin-bottom="0.2cm" fo:line-height="115%"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="13pt" fo:font-weight="bold"/></style:style>
+<style:style style:name="Heading2" style:family="paragraph"><style:paragraph-properties fo:text-align="left" fo:text-indent="0cm" fo:margin-top="0.4cm" fo:margin-bottom="0.2cm" fo:line-height="115%"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="13pt" fo:font-weight="bold"/></style:style>
 <style:style style:name="Heading3" style:family="paragraph"><style:paragraph-properties fo:text-align="left" fo:text-indent="0cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="${s.fontSizePt}pt" fo:font-weight="bold"/></style:style>
 <style:style style:name="Heading4" style:family="paragraph"><style:paragraph-properties fo:text-align="left" fo:text-indent="0cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="${s.fontSizePt}pt" fo:font-weight="bold"/></style:style>
 <style:style style:name="Quote" style:family="paragraph"><style:paragraph-properties fo:text-align="justify" fo:margin-left="0.5cm" fo:margin-right="0.5cm" fo:text-indent="0cm" fo:margin-top="${mmToCm(s.beforeMm)}cm" fo:margin-bottom="${mmToCm(s.afterMm)}cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="${s.fontSizePt}pt" fo:font-style="italic"/></style:style>
 <style:style style:name="List" style:family="paragraph"><style:paragraph-properties fo:text-align="justify" fo:margin-left="0.5cm" fo:text-indent="0cm" fo:margin-top="${mmToCm(s.beforeMm)}cm" fo:margin-bottom="${mmToCm(s.afterMm)}cm"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="${s.fontSizePt}pt"/></style:style>
-</office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="${s.widthCm}cm" fo:page-height="${s.heightCm}cm" fo:margin-top="${mmToCm(s.topMm)}cm" fo:margin-bottom="${mmToCm(s.bottomMm)}cm" fo:margin-left="${mmToCm(s.leftMm)}cm" fo:margin-right="${mmToCm(s.rightMm)}cm" style:print-orientation="portrait"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>`;
+<style:style style:name="Header" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm" fo:margin-top="0cm" fo:margin-bottom="0cm" fo:line-height="11pt"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="9pt" fo:font-style="italic"/></style:style>
+<style:style style:name="Footer" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:text-indent="0cm" fo:margin-top="0cm" fo:margin-bottom="0cm" fo:line-height="11pt"/><style:text-properties style:font-name="${fontFaceName}" fo:font-family="${xmlEscape(fontFamily)}" fo:font-size="9pt"/></style:style>
+</office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="${s.widthCm}cm" fo:page-height="${s.heightCm}cm" fo:margin-top="${mmToCm(topEdge)}cm" fo:margin-bottom="${mmToCm(bottomEdge)}cm" fo:margin-left="${mmToCm(s.leftMm)}cm" fo:margin-right="${mmToCm(s.rightMm)}cm" style:print-orientation="portrait"/>${headerStyleXml}${footerStyleXml}</style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">${masterParts.join('')}</style:master-page></office:master-styles></office:document-styles>`;
     const manifest = `<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/></manifest:manifest>`;
     const meta = `<?xml version="1.0" encoding="UTF-8"?><office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3"><office:meta><dc:title>${xmlEscape(project.title || '')}</dc:title><dc:creator>${xmlEscape(project.author || '')}</dc:creator><dc:language>fr-FR</dc:language><meta:creation-date>${new Date().toISOString()}</meta:creation-date></office:meta></office:document-meta>`;
     return makeZip([
@@ -2777,37 +3253,66 @@ function xhtmlDocument(title, body, lang = 'fr') {
     return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${lang}" lang="${lang}"><head><meta charset="UTF-8"/><title>${xmlEscape(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body>${body}</body></html>`;
 }
 
+// Sommaire EPUB imbriqué : un sous-chapitre apparaît dans la liste de son parent.
+function epubNavMarkup(items) {
+    const root = { children: [] };
+    const stack = [{ depth: -1, node: root }];
+    for (const item of items) {
+        const depth = Math.min(item.depth, stack[stack.length - 1].depth + 1);
+        while (stack[stack.length - 1].depth >= depth) stack.pop();
+        const node = { ...item, children: [] };
+        stack[stack.length - 1].node.children.push(node);
+        stack.push({ depth, node });
+    }
+    const render = (nodes) => (nodes.length
+        ? `<ol>${nodes.map((node) => `<li><a href="${node.file}">${htmlEscape(node.title)}</a>${render(node.children)}</li>`).join('')}</ol>`
+        : '');
+    return render(root.children);
+}
+
+function epubLanguage(project) {
+    const language = String(project.language || 'fr').trim();
+    return /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(language) ? language : 'fr';
+}
+
 function buildEpub(project, chapters) {
+    const lang = epubLanguage(project);
+    const frontPage = project.frontPage !== false;
     const entries = [{ name: 'mimetype', data: 'application/epub+zip' }];
     entries.push({ name: 'META-INF/container.xml', data: `<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>` });
     entries.push({ name: 'OEBPS/style.css', data: epubCss(project) });
     const manifest = [`<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>`, `<item id="css" href="style.css" media-type="text/css"/>`];
     const spine = [];
     const navItems = [];
-    if (project.frontPage !== false) {
+    if (frontPage) {
         const titleBody = `<section class="title-page"><h1>${htmlEscape(normalizeExportText(project.title || 'Projet'))}</h1>${project.subtitle ? `<p><em>${htmlEscape(normalizeExportText(project.subtitle))}</em></p>` : ''}${project.author ? `<p>${htmlEscape(normalizeExportText(project.author))}</p>` : ''}</section>`;
-        entries.push({ name: 'OEBPS/title.xhtml', data: xhtmlDocument(project.title || 'Projet', titleBody) });
+        entries.push({ name: 'OEBPS/title.xhtml', data: xhtmlDocument(project.title || 'Projet', titleBody, lang) });
         manifest.push(`<item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>`);
         spine.push('<itemref idref="title"/>');
     }
     let rootNo = 0;
     chapters.forEach((chapter, index) => {
-        const root = Number(chapter._depth || 0) === 0;
+        const depth = Number(chapter._depth || 0);
+        const root = depth === 0;
         if (root) rootNo += 1;
         const title = chapterExportTitle(project, chapter, rootNo);
         const file = `chapter-${String(index + 1).padStart(3, '0')}.xhtml`;
         const id = `ch${index + 1}`;
-        const level = Math.min(4, Number(chapter._depth || 0) + 1);
+        const level = Math.min(4, depth + 1);
         const body = `<section class="chapter ${root ? 'root-chapter' : 'subchapter'}"><h${level}>${htmlEscape(title)}</h${level}>${renderBlocksHtml(htmlToBlocks(chapter.content || ''))}</section>`;
-        entries.push({ name: `OEBPS/${file}`, data: xhtmlDocument(title, body) });
+        entries.push({ name: `OEBPS/${file}`, data: xhtmlDocument(title, body, lang) });
         manifest.push(`<item id="${id}" href="${file}" media-type="application/xhtml+xml"/>`);
         spine.push(`<itemref idref="${id}"/>`);
-        navItems.push(`<li><a href="${file}">${htmlEscape(title)}</a></li>`);
+        navItems.push({ depth, file, title });
     });
-    const nav = xhtmlDocument('Sommaire', `<nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><h1>Sommaire</h1><ol>${navItems.join('')}</ol></nav>`);
+    const nav = xhtmlDocument('Sommaire', `<nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><h1>Sommaire</h1>${epubNavMarkup(navItems)}</nav>`, lang);
     entries.push({ name: 'OEBPS/nav.xhtml', data: nav });
-    const identifier = `urn:ecrivain:${xmlEscape(project.id || safeFolderName(project.title || 'projet').toLowerCase())}:${Date.now()}`;
-    const opf = `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${identifier}</dc:identifier><dc:title>${xmlEscape(project.title || 'Projet')}</dc:title><dc:language>fr</dc:language>${project.author ? `<dc:creator>${xmlEscape(project.author)}</dc:creator>` : ''}<meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}</meta></metadata><manifest>${manifest.join('')}</manifest><spine>${spine.join('')}</spine></package>`;
+
+    // Identifiant stable : le même livre garde le même identifiant d'une exportation à l'autre
+    // (les liseuses et les bibliothèques numériques s'en servent pour reconnaître le titre).
+    const uuid = UUID_PATTERN.test(String(project.uuid || '')) ? String(project.uuid).toLowerCase() : crypto.randomUUID();
+    const description = String(project.description || '').trim();
+    const opf = `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="${lang}"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">urn:uuid:${uuid}</dc:identifier><dc:title>${xmlEscape(project.title || 'Projet')}</dc:title><dc:language>${lang}</dc:language>${project.author ? `<dc:creator>${xmlEscape(project.author)}</dc:creator>` : ''}${description ? `<dc:description>${xmlEscape(description)}</dc:description>` : ''}<meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}</meta></metadata><manifest>${manifest.join('')}</manifest><spine>${spine.join('')}</spine></package>`;
     entries.push({ name: 'OEBPS/content.opf', data: opf });
     return makeZip(entries);
 }
@@ -2815,7 +3320,7 @@ function buildEpub(project, chapters) {
 function buildPrintHtml(project, chapters) {
     const s = projectExportSettings(project);
     const sections = [];
-    if (project.frontPage !== false) {
+    if (s.frontPage) {
         sections.push(`<section class="title-page"><h1>${htmlEscape(normalizeExportText(project.title || 'Projet'))}</h1>${project.subtitle ? `<p class="subtitle">${htmlEscape(normalizeExportText(project.subtitle))}</p>` : ''}${project.author ? `<p class="author">${htmlEscape(normalizeExportText(project.author))}</p>` : ''}</section>`);
     }
     let rootNo = 0;
@@ -2827,16 +3332,35 @@ function buildPrintHtml(project, chapters) {
         const level = Math.min(4, Number(chapter._depth || 0) + 1);
         sections.push(`<section class="chapter ${root ? 'root-chapter' : 'subchapter'} ${chapterIndex === 0 ? 'first-chapter' : ''}"><h${level}>${htmlEscape(title)}</h${level}>${renderBlocksHtml(htmlToBlocks(chapter.content || ''))}</section>`);
     }
-    return `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><style>
+
+    // Numéros de page et en-têtes courants : boîtes de marge CSS (@page), calculées
+    // par le moteur d'impression. La page de titre est comptée mais reste vierge.
+    const fontCss = `"${String(s.font).replace(/["\\<]/g, '')}", Garamond, Georgia, serif`;
+    const boxStyle = `font-family: ${fontCss}; font-size: 9pt; line-height: 11pt; color: #000; text-indent: 0;`;
+    const headers = runningHeaderTexts(project, s);
+    const pageRules = [];
+    if (s.pageNumbers) pageRules.push(`@page { @bottom-center { content: counter(page); ${boxStyle} } }`);
+    if (headers.mirrored) {
+        pageRules.push(`@page :right { @top-center { content: "${cssString(headers.odd)}"; font-style: italic; ${boxStyle} } }`);
+        pageRules.push(`@page :left { @top-center { content: "${cssString(headers.even)}"; font-style: italic; ${boxStyle} } }`);
+    } else if (headers.odd) {
+        pageRules.push(`@page { @top-center { content: "${cssString(headers.odd)}"; font-style: italic; ${boxStyle} } }`);
+    }
+    if (s.frontPage && pageRules.length) {
+        pageRules.push('@page :first { @top-center { content: none; } @bottom-center { content: none; } }');
+    }
+
+    return `<!DOCTYPE html><html lang="${epubLanguage(project)}"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"><style>
 @page { size: ${s.widthCm}cm ${s.heightCm}cm; margin: ${s.topMm}mm ${s.rightMm}mm ${s.bottomMm}mm ${s.leftMm}mm; }
+${pageRules.join('\n')}
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
-body { font-family: "${String(s.font).replace(/"/g, '')}", Garamond, Georgia, serif; font-size: ${s.fontSizePt}pt; line-height: ${s.lineSpacingPt}pt; color: #000; }
-p { text-align: justify; text-indent: ${s.indentMm}mm; margin-top: ${s.beforeMm}mm; margin-bottom: ${s.afterMm}mm; orphans: 2; widows: 2; }
-h1,h2,h3,h4 { text-align: left; text-indent: 0; break-after: avoid; page-break-after: avoid; }
+body { font-family: ${fontCss}; font-size: ${s.fontSizePt}pt; line-height: ${s.lineSpacingPt}pt; color: #000; }
+p { text-align: justify; text-indent: ${s.indentMm}mm; margin-top: ${s.beforeMm}mm; margin-bottom: ${s.afterMm}mm; orphans: 2; widows: 2; hyphens: auto; -webkit-hyphens: auto; }
+h1,h2,h3,h4 { text-align: left; text-indent: 0; break-after: avoid; page-break-after: avoid; hyphens: manual; }
 .chapter.root-chapter > h1 { text-align: center; }
 ${s.chapterPageBreak ? `.chapter:not(.first-chapter) { break-before: page; page-break-before: always; }
-${project.frontPage !== false ? '.chapter.first-chapter { break-before: page; page-break-before: always; }' : ''}` : ''}
+${s.frontPage ? '.chapter.first-chapter { break-before: page; page-break-before: always; }' : ''}` : ''}
 .title-page { min-height: ${Math.max(1, s.heightCm - (s.topMm + s.bottomMm) / 10)}cm; display: flex; flex-direction: column; justify-content: center; text-align: center; break-after: page; page-break-after: always; }
 .title-page h1 { font-size: 20pt; text-align: center; margin: 0 0 8mm 0; }
 .title-page p { text-align: center; text-indent: 0; }
@@ -2847,42 +3371,35 @@ ul,ol { margin-top: 0; margin-bottom: 0; }
 </style></head><body>${sections.join('\n')}</body></html>`;
 }
 
-async function saveExportBuffer(kind, extension, title, buffer) {
-    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const state = await loadCurrentProject();
-    const defaultName = `${safeFolderName(state.project.title || 'export')}.${extension}`;
+async function saveExportBuffer(extension, title, project, buffer, excluded = 0) {
+    const defaultName = `${safeFolderName(project.title || 'export')}.${extension}`;
     const result = await dialog.showSaveDialog(mainWindow, {
         title,
         defaultPath: path.join(currentProjectDir, 'exports', defaultName),
         filters: [{ name: extension.toUpperCase(), extensions: [extension] }]
     });
     if (result.canceled || !result.filePath) return { canceled: true };
-    await fs.writeFile(result.filePath, buffer);
-    return { canceled: false, filePath: result.filePath };
+    await fsSafe.writeFileAtomic(result.filePath, buffer);
+    return { canceled: false, filePath: result.filePath, excluded };
 }
 
 async function exportDocx() {
-    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const state = await loadCurrentProject();
-    return saveExportBuffer('docx', 'docx', 'Exporter au format Word', buildDocx(state.project, state.chapters));
+    const { project, chapters, excluded } = await loadExportState();
+    return saveExportBuffer('docx', 'Exporter au format Word', project, buildDocx(project, chapters), excluded);
 }
 
 async function exportOdt() {
-    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const state = await loadCurrentProject();
-    return saveExportBuffer('odt', 'odt', 'Exporter au format OpenDocument', buildOdt(state.project, state.chapters));
+    const { project, chapters, excluded } = await loadExportState();
+    return saveExportBuffer('odt', 'Exporter au format OpenDocument', project, buildOdt(project, chapters), excluded);
 }
 
 async function exportEpub() {
-    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const state = await loadCurrentProject();
-    return saveExportBuffer('epub', 'epub', 'Exporter au format EPUB', buildEpub(state.project, state.chapters));
+    const { project, chapters, excluded } = await loadExportState();
+    return saveExportBuffer('epub', 'Exporter au format EPUB', project, buildEpub(project, chapters), excluded);
 }
 
 async function exportPdf() {
-    if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const state = await loadCurrentProject();
-    const project = state.project;
+    const { project, chapters, excluded } = await loadExportState();
     const s = projectExportSettings(project);
     const defaultName = `${safeFolderName(project.title || 'export')}.pdf`;
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -2894,8 +3411,9 @@ async function exportPdf() {
 
     const tempFile = path.join(app.getPath('temp'), `ecrivain-export-${process.pid}-${Date.now()}.html`);
     const pdfWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+    hardenWebContents(pdfWindow.webContents, { allowedUrl: pathToFileURL(tempFile).href });
     try {
-        await fs.writeFile(tempFile, buildPrintHtml(project, state.chapters), 'utf8');
+        await fs.writeFile(tempFile, buildPrintHtml(project, chapters), 'utf8');
         await pdfWindow.loadFile(tempFile);
         try { await pdfWindow.webContents.executeJavaScript('document.fonts ? document.fonts.ready.then(() => true) : true'); } catch (_) {}
         const pdf = await pdfWindow.webContents.printToPDF({
@@ -2903,8 +3421,8 @@ async function exportPdf() {
             preferCSSPageSize: true,
             pageSize: { width: Math.round(s.widthCm * 10000), height: Math.round(s.heightCm * 10000) }
         });
-        await fs.writeFile(result.filePath, pdf);
-        return { canceled: false, filePath: result.filePath };
+        await fsSafe.writeFileAtomic(result.filePath, pdf);
+        return { canceled: false, filePath: result.filePath, excluded };
     } finally {
         if (!pdfWindow.isDestroyed()) pdfWindow.destroy();
         await fs.rm(tempFile, { force: true }).catch(() => {});
@@ -3280,6 +3798,11 @@ function safeAttachmentBase(name) {
     return `${clean}${ext.toLowerCase()}`;
 }
 
+// Fichiers que l'auteur a lui-même choisis dans la boîte de dialogue : seuls ceux-là
+// peuvent être copiés dans le projet. L'interface ne peut pas désigner un chemin arbitraire.
+const pickedAttachments = new Map();
+const PICKED_ATTACHMENT_TTL_MS = 30 * 60 * 1000;
+
 async function pickNoteAttachment() {
     const result = await dialog.showOpenDialog(mainWindow, {
         title: 'Choisir un fichier pour la note',
@@ -3294,6 +3817,7 @@ async function pickNoteAttachment() {
     const ext = attachmentExtension(sourcePath);
     if (!NOTE_ALLOWED_EXTENSIONS.has(ext)) throw new Error('Ce type de fichier n’est pas autorisé dans les notes.');
     const stat = await fs.stat(sourcePath);
+    pickedAttachments.set(path.resolve(sourcePath), Date.now() + PICKED_ATTACHMENT_TTL_MS);
     return {
         canceled: false,
         sourcePath,
@@ -3303,6 +3827,11 @@ async function pickNoteAttachment() {
 }
 
 async function copyNoteAttachment(sourcePath, noteId) {
+    const resolvedSource = path.resolve(String(sourcePath || ''));
+    const expires = pickedAttachments.get(resolvedSource);
+    if (!expires || expires < Date.now()) {
+        throw new Error('Choisissez le fichier avec le bouton « Choisir un fichier » avant de l’enregistrer.');
+    }
     const ext = attachmentExtension(sourcePath);
     if (!NOTE_ALLOWED_EXTENSIONS.has(ext)) throw new Error('Ce type de fichier n’est pas autorisé dans les notes.');
     if (!fsSync.existsSync(sourcePath)) throw new Error('Le fichier choisi est introuvable.');
@@ -3313,6 +3842,7 @@ async function copyNoteAttachment(sourcePath, noteId) {
     await fs.mkdir(targetDir, { recursive: true });
     const target = path.join(targetDir, storedName);
     await fs.copyFile(sourcePath, target);
+    pickedAttachments.delete(resolvedSource);
     const stat = await fs.stat(target);
     return {
         path: path.posix.join('assets', 'notes', storedName),
@@ -3342,7 +3872,7 @@ async function saveFileNote(data = {}) {
 
     const sourcePath = String(data.sourcePath || '');
     if (sourcePath) {
-        if (existing?.path) oldAbsolute = path.join(currentProjectDir, ...String(existing.path).split('/'));
+        if (existing?.path) oldAbsolute = noteAssetFile(existing);
         attachment = await copyNoteAttachment(sourcePath, noteId);
     }
     if (!attachment || !attachment.path) throw new Error('Choisissez un fichier pour cette note.');
@@ -3362,7 +3892,7 @@ async function saveFileNote(data = {}) {
     await writeJson(path.join(currentProjectDir, 'notes', `${note.id}.json`), note);
 
     if (oldAbsolute && fsSync.existsSync(oldAbsolute)) {
-        const newAbsolute = path.join(currentProjectDir, ...String(note.path).split('/'));
+        const newAbsolute = noteAssetFile(note);
         if (path.resolve(oldAbsolute) !== path.resolve(newAbsolute)) {
             await fs.rm(oldAbsolute, { force: true }).catch(() => {});
         }
@@ -3373,18 +3903,30 @@ async function saveFileNote(data = {}) {
 async function deleteNote(noteId) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
     const note = await getNote(noteId);
-    if (note.type === 'file' && note.path) {
-        const asset = path.join(currentProjectDir, ...String(note.path).split('/'));
-        await fs.rm(asset, { force: true }).catch(() => {});
-    }
-    await fs.rm(path.join(currentProjectDir, 'notes', `${note.id}.json`), { force: true });
+    const entryId = `${compactTimestamp()}-${note.id}`;
+    const entryDir = trashEntryDir(entryId);
+    await fs.mkdir(entryDir, { recursive: true });
+    const manifest = {
+        formatVersion: 1,
+        id: entryId,
+        kind: 'note',
+        title: String(note.title || 'Note'),
+        deletedAt: nowString(),
+        chapters: [],
+        notes: [],
+        wordCount: note.type === 'text' ? Text.countWordsFromHtml(note.content || '') : 0
+    };
+    await writeJson(path.join(entryDir, 'manifest.json'), manifest);
+    const summary = await moveNoteToTrash(note.id, entryDir);
+    if (summary) manifest.notes.push(summary);
+    await writeJson(path.join(entryDir, 'manifest.json'), manifest);
     return listNotes();
 }
 
 async function openNoteAttachment(noteId) {
     const note = await getNote(noteId);
     if (note.type !== 'file' || !note.path) throw new Error('Cette note ne contient pas de fichier.');
-    const asset = path.join(currentProjectDir, ...String(note.path).split('/'));
+    const asset = noteAssetFile(note);
     if (!fsSync.existsSync(asset)) throw new Error('Le fichier joint est introuvable.');
     const error = await shell.openPath(asset);
     if (error) throw new Error(error);
@@ -3673,7 +4215,12 @@ function statisticsPaths() {
     };
 }
 
-async function recordWritingStats(chapter, fallbackPreviousWords = 0) {
+function recordWritingStats(chapter, fallbackPreviousWords = 0, forcePrevious = false) {
+    if (!currentProjectDir || !chapter?.id) return Promise.resolve();
+    return fsSafe.runExclusive(`stats:${currentProjectDir}`, () => recordWritingStatsNow(chapter, fallbackPreviousWords, forcePrevious));
+}
+
+async function recordWritingStatsNow(chapter, fallbackPreviousWords = 0, forcePrevious = false) {
     if (!currentProjectDir || !chapter?.id) return;
     const paths = statisticsPaths();
     await fs.mkdir(paths.dir, { recursive: true });
@@ -3681,7 +4228,7 @@ async function recordWritingStats(chapter, fallbackPreviousWords = 0) {
     const snapshots = await readJsonOrEmpty(paths.snapshots);
     const currentWords = Math.max(0, Number(chapter.wordCount || 0));
     const hasSnapshot = Object.prototype.hasOwnProperty.call(snapshots, chapter.id);
-    const previousWords = hasSnapshot
+    const previousWords = hasSnapshot && !forcePrevious
         ? Math.max(0, Number(snapshots[chapter.id] || 0))
         : Math.max(0, Number(fallbackPreviousWords || 0));
     const delta = currentWords - previousWords;
@@ -3737,11 +4284,12 @@ async function statisticsState() {
     let excludedChapters = 0;
     const statusCounts = {};
     const chapterStats = [];
+    const exported = new Set(selectChaptersForExport(state.project, chapters).chapters.map((chapter) => chapter.id));
 
     for (const chapter of chapters) {
         const words = Math.max(0, Number(chapter.wordCount || 0));
         totalWords += words;
-        const excluded = Boolean(chapter.excludeFromExport);
+        const excluded = !exported.has(chapter.id);
         if (excluded) excludedChapters += 1;
         else exportWords += words;
 
@@ -3921,7 +4469,23 @@ async function exportMindmapPng(dataUrl) {
 // SAUVEGARDES DU PROJET ET HISTORIQUE DES CHAPITRES
 // =========================================================
 
-const MAX_PROJECT_BACKUPS = 5;
+// Deux quotas distincts : les sauvegardes déclenchées automatiquement (avant un
+// remplacement global, avant une restauration…) ne peuvent plus évincer celles que
+// l'auteur a lancées lui-même.
+const MAX_MANUAL_BACKUPS = 5;
+const MAX_AUTO_BACKUPS = 5;
+const MAX_PROJECT_BACKUPS = MAX_MANUAL_BACKUPS + MAX_AUTO_BACKUPS;
+const MANUAL_BACKUP_REASON = 'Sauvegarde manuelle';
+const MAX_EXTERNAL_BACKUPS = 10;
+// Dossiers jamais copiés dans une sauvegarde (reconstituables ou déjà sauvegardés ailleurs).
+const BACKUP_EXCLUDED = new Set(['backups', 'history', 'exports', 'trash']);
+// Dossiers conservés tels quels lors d'une restauration.
+const RESTORE_KEEP = new Set(['backups', 'history', 'exports', 'trash']);
+
+function backupKind(meta = {}) {
+    if (meta.kind === 'manual' || meta.kind === 'auto') return meta.kind;
+    return String(meta.reason || '') === MANUAL_BACKUP_REASON ? 'manual' : 'auto';
+}
 const HISTORY_AUTOSAVE_INTERVAL_MS = 10 * 60 * 1000;
 
 function compactTimestamp(date = new Date()) {
@@ -3955,7 +4519,7 @@ async function trimChapterAutosaves(chapterId, maxFiles = 20) {
 
 async function listChapterHistoryFiles(chapterId) {
     if (!currentProjectDir) return [];
-    const dir = path.join(currentProjectDir, 'history', chapterId);
+    const dir = chapterHistoryDir(chapterId);
     if (!fsSync.existsSync(dir)) return [];
     const entries = await fs.readdir(dir, { withFileTypes: true });
     return entries
@@ -3965,9 +4529,13 @@ async function listChapterHistoryFiles(chapterId) {
         .reverse();
 }
 
+// Dernier jalon automatique par chapitre, gardé en mémoire : évite de lister le
+// dossier et de relire un fichier complet à chaque autosauvegarde.
+const historyLastAt = new Map();
+
 async function createChapterHistorySnapshot(chapter, source = 'manual') {
     if (!currentProjectDir || !chapter?.id) return null;
-    const dir = path.join(currentProjectDir, 'history', chapter.id);
+    const dir = chapterHistoryDir(chapter.id);
     await fs.mkdir(dir, { recursive: true });
 
     const existingFiles = await listChapterHistoryFiles(chapter.id);
@@ -3988,20 +4556,81 @@ async function createChapterHistorySnapshot(chapter, source = 'manual') {
         }
     };
     await writeJson(path.join(dir, fileName), payload);
+    historyLastAt.set(historyCacheKey(chapter.id), Date.now());
+    // Rétention : on allège les anciens jalons automatiques (voir pruneChapterHistory).
+    await pruneChapterHistory(chapter.id).catch((error) => writeDiagnostic('WARN', 'Allègement de l’historique impossible.', error));
     return fileName;
+}
+
+function historyCacheKey(chapterId) {
+    return `${currentProjectDir}::${chapterId}`;
 }
 
 async function maybeCreateChapterHistory(existing, source = 'autosave') {
     if (!currentProjectDir || !existing?.id) return null;
-    const files = await listChapterHistoryFiles(existing.id);
-    if (source === 'autosave' && files[0]) {
-        try {
-            const latest = await readJson(path.join(currentProjectDir, 'history', existing.id, files[0]));
-            const lastAt = Date.parse(latest?._history?.savedAt || '');
-            if (Number.isFinite(lastAt) && (Date.now() - lastAt) < HISTORY_AUTOSAVE_INTERVAL_MS) return null;
-        } catch (_) {}
+    if (source === 'autosave') {
+        const key = historyCacheKey(existing.id);
+        let lastAt = historyLastAt.get(key);
+        if (lastAt === undefined) {
+            lastAt = 0;
+            const files = await listChapterHistoryFiles(existing.id);
+            if (files[0]) {
+                try {
+                    const latest = await readJson(path.join(chapterHistoryDir(existing.id), files[0]));
+                    const parsed = Date.parse(latest?._history?.savedAt || '');
+                    if (Number.isFinite(parsed)) lastAt = parsed;
+                } catch (_) {}
+            }
+            historyLastAt.set(key, lastAt);
+        }
+        if (lastAt && (Date.now() - lastAt) < HISTORY_AUTOSAVE_INTERVAL_MS) return null;
     }
     return createChapterHistorySnapshot(existing, source);
+}
+
+// Rétention de l'historique des chapitres (jalons automatiques uniquement) :
+//  - 7 derniers jours : tout est conservé ;
+//  - 8 à 30 jours : un jalon par jour (le plus récent) ;
+//  - au-delà : un jalon par semaine.
+// Les jalons manuels, « avant restauration » et « remplacement global » ne sont jamais supprimés.
+const HISTORY_NAME = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(\d{3})-autosave\.json$/;
+
+function isoWeekKey(date) {
+    const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNumber = (target.getUTCDay() + 6) % 7;
+    target.setUTCDate(target.getUTCDate() - dayNumber + 3);
+    const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+    const week = 1 + Math.round(((target - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+    return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function historyFilesToPrune(fileNames, now = Date.now()) {
+    const day = 24 * 60 * 60 * 1000;
+    const kept = new Set();
+    const doomed = [];
+    // Du plus récent au plus ancien.
+    for (const name of [...fileNames].sort().reverse()) {
+        const match = HISTORY_NAME.exec(name);
+        if (!match) continue;
+        const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6]));
+        const age = now - date.getTime();
+        if (age <= 7 * day) continue;
+        const key = age <= 30 * day
+            ? `d:${match[1]}${match[2]}${match[3]}`
+            : `w:${isoWeekKey(date)}`;
+        if (kept.has(key)) doomed.push(name);
+        else kept.add(key);
+    }
+    return doomed;
+}
+
+async function pruneChapterHistory(chapterId) {
+    const dir = chapterHistoryDir(chapterId);
+    if (!fsSync.existsSync(dir)) return 0;
+    const names = (await fs.readdir(dir, { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => entry.name);
+    const doomed = historyFilesToPrune(names);
+    for (const name of doomed) await fs.rm(path.join(dir, name), { force: true });
+    return doomed.length;
 }
 
 function safeVersionFileName(value) {
@@ -4012,15 +4641,15 @@ function safeVersionFileName(value) {
 
 async function chapterHistoryState(chapterId) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const chapterFile = path.join(currentProjectDir, 'chapters', `${chapterId}.json`);
-    if (!fsSync.existsSync(chapterFile)) throw new Error('Chapitre introuvable.');
-    const current = await readJson(chapterFile);
+    const file = chapterFile(chapterId);
+    if (!fsSync.existsSync(file)) throw new Error('Chapitre introuvable.');
+    const current = await readJson(file);
     const files = await listChapterHistoryFiles(chapterId);
     const versions = [];
 
     for (const fileName of files) {
         try {
-            const item = await readJson(path.join(currentProjectDir, 'history', chapterId, fileName));
+            const item = await readJson(path.join(chapterHistoryDir(chapterId), fileName));
             versions.push({
                 id: fileName,
                 savedAt: item?._history?.savedAt || item.updatedAt || '',
@@ -4052,10 +4681,10 @@ async function chapterHistoryState(chapterId) {
 async function getChapterHistoryVersion(chapterId, versionId) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
     if (versionId === 'current') {
-        return readJson(path.join(currentProjectDir, 'chapters', `${chapterId}.json`));
+        return readJson(chapterFile(chapterId));
     }
     const safeName = safeVersionFileName(versionId);
-    const file = path.join(currentProjectDir, 'history', chapterId, safeName);
+    const file = path.join(chapterHistoryDir(chapterId), safeName);
     if (!fsSync.existsSync(file)) throw new Error('Cette version n’existe plus.');
     const version = await readJson(file);
     delete version._history;
@@ -4064,7 +4693,7 @@ async function getChapterHistoryVersion(chapterId, versionId) {
 
 async function restoreChapterHistoryVersion(chapterId, versionId) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
-    const currentFile = path.join(currentProjectDir, 'chapters', `${chapterId}.json`);
+    const currentFile = chapterFile(chapterId);
     if (!fsSync.existsSync(currentFile)) throw new Error('Chapitre introuvable.');
     const current = await readJson(currentFile);
     const historical = await getChapterHistoryVersion(chapterId, versionId);
@@ -4081,7 +4710,10 @@ async function restoreChapterHistoryVersion(chapterId, versionId) {
         updatedAt: nowString()
     };
     delete restored._history;
-    await writeJson(currentFile, restored);
+    restored.wordCount = Text.countWordsFromHtml(restored.content || '');
+    restored.wcv = Text.WORD_COUNT_VERSION;
+    const projectDir = currentProjectDir;
+    await fsSafe.runExclusive(`chapter:${projectDir}:${current.id}`, () => writeJson(currentFile, restored));
     return restored;
 }
 
@@ -4115,7 +4747,7 @@ async function copyProjectToSnapshot(snapshotDir) {
     const entries = await fs.readdir(currentProjectDir, { withFileTypes: true });
     await fs.mkdir(snapshotDir, { recursive: true });
     for (const entry of entries) {
-        if (entry.name === 'backups' || entry.name === 'history') continue;
+        if (BACKUP_EXCLUDED.has(entry.name)) continue;
         const src = path.join(currentProjectDir, entry.name);
         const dst = path.join(snapshotDir, entry.name);
         if (entry.isDirectory()) {
@@ -4142,6 +4774,7 @@ async function listProjectBackups() {
             id: entry.name,
             createdAt: meta.createdAt || '',
             reason: meta.reason || 'Sauvegarde',
+            kind: backupKind(meta),
             sizeBytes: Number(meta.sizeBytes || await folderSizeBytes(dir))
         });
     }
@@ -4159,8 +4792,13 @@ async function pruneProjectBackups(protectedIds = []) {
     for (const item of items) {
         if (protectedSet.has(item.id)) keep.add(item.id);
     }
+    // Quota par type, du plus récent au plus ancien.
+    const counts = { manual: 0, auto: 0 };
+    const limits = { manual: MAX_MANUAL_BACKUPS, auto: MAX_AUTO_BACKUPS };
     for (const item of items) {
-        if (keep.size >= MAX_PROJECT_BACKUPS) break;
+        const kind = item.kind === 'manual' ? 'manual' : 'auto';
+        if (counts[kind] >= limits[kind]) continue;
+        counts[kind] += 1;
         keep.add(item.id);
     }
     for (const item of items) {
@@ -4170,31 +4808,68 @@ async function pruneProjectBackups(protectedIds = []) {
     }
 }
 
-async function createProjectBackup(reason = 'Sauvegarde manuelle', protectedIds = []) {
+async function createProjectBackup(reason = MANUAL_BACKUP_REASON, protectedIds = [], kind = null) {
     if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
+    const backupKindValue = kind || (String(reason) === MANUAL_BACKUP_REASON ? 'manual' : 'auto');
     const root = path.join(currentProjectDir, 'backups');
     await fs.mkdir(root, { recursive: true });
+    // Les écritures en cours (autosauvegarde du chapitre actif) doivent être terminées.
+    await fsSafe.whenIdle(4000);
     const id = `backup-${compactTimestamp()}`;
     const dir = path.join(root, id);
     await fs.mkdir(dir, { recursive: true });
     await copyProjectToSnapshot(dir);
     const sizeBytes = await folderSizeBytes(dir);
+    const createdAt = new Date().toISOString();
     await writeJson(path.join(dir, 'backup.json'), {
         id,
-        createdAt: new Date().toISOString(),
+        createdAt,
         reason,
+        kind: backupKindValue,
         sizeBytes,
         format: 'ecrivain-project-backup',
         version: 1
     });
     await pruneProjectBackups([id, ...(protectedIds || [])]);
-    return { id, createdAt: new Date().toISOString(), reason, sizeBytes };
+    const external = await copyBackupToExternalFolder(dir, id);
+    return { id, createdAt, reason, kind: backupKindValue, sizeBytes, external };
+}
+
+// Copie facultative de chaque sauvegarde dans un dossier choisi par l'auteur
+// (disque externe, dossier synchronisé…). Un échec n'annule jamais la sauvegarde locale.
+async function copyBackupToExternalFolder(sourceDir, backupId) {
+    const configured = String(loadPreferencesSync().externalBackupDir || '').trim();
+    if (!configured) return { enabled: false };
+    try {
+        const stat = await fs.stat(configured).catch(() => null);
+        if (!stat || !stat.isDirectory()) throw new Error('Le dossier de sauvegarde externe est introuvable.');
+        const projectFolder = safeFolderName(path.basename(currentProjectDir)) || 'projet';
+        const targetRoot = path.join(configured, `Ecrivain-sauvegardes`, projectFolder);
+        await fs.mkdir(targetRoot, { recursive: true });
+        const target = path.join(targetRoot, backupId);
+        await fs.cp(sourceDir, target, { recursive: true, force: true });
+        const names = (await fs.readdir(targetRoot, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory() && entry.name.startsWith('backup-'))
+            .map((entry) => entry.name)
+            .sort()
+            .reverse();
+        for (const name of names.slice(MAX_EXTERNAL_BACKUPS)) {
+            await fs.rm(path.join(targetRoot, name), { recursive: true, force: true });
+        }
+        return { enabled: true, ok: true, path: target };
+    } catch (error) {
+        writeDiagnostic('WARN', 'Copie de sauvegarde vers le dossier externe impossible.', error);
+        return { enabled: true, ok: false, message: error.message };
+    }
 }
 
 async function projectBackupsState() {
     return {
         maxBackups: MAX_PROJECT_BACKUPS,
+        maxManual: MAX_MANUAL_BACKUPS,
+        maxAuto: MAX_AUTO_BACKUPS,
         backups: await listProjectBackups(),
+        externalDir: String(loadPreferencesSync().externalBackupDir || ''),
         projectDir: currentProjectDir
     };
 }
@@ -4221,13 +4896,13 @@ async function restoreProjectBackup(backupId) {
 
     const entries = await fs.readdir(currentProjectDir, { withFileTypes: true });
     for (const entry of entries) {
-        if (entry.name === 'backups' || entry.name === 'history') continue;
+        if (RESTORE_KEEP.has(entry.name)) continue;
         await fs.rm(path.join(currentProjectDir, entry.name), { recursive: true, force: true });
     }
 
     const snapshotEntries = await fs.readdir(source, { withFileTypes: true });
     for (const entry of snapshotEntries) {
-        if (entry.name === 'backup.json') continue;
+        if (entry.name === 'backup.json' || RESTORE_KEEP.has(entry.name)) continue;
         const src = path.join(source, entry.name);
         const dst = path.join(currentProjectDir, entry.name);
         if (entry.isDirectory()) await fs.cp(src, dst, { recursive: true, force: true });
@@ -4942,7 +5617,7 @@ async function pluginApiRequest(pluginId, method, params = {}) {
         if (!currentProjectDir) throw new Error('Aucun projet ouvert.');
         const id = String(params?.id || '').trim();
         if (!id) throw new Error('Chapitre invalide.');
-        const file = path.join(currentProjectDir, 'chapters', `${id}.json`);
+        const file = chapterFile(id);
         if (!fsSync.existsSync(file)) throw new Error('Chapitre introuvable.');
         const chapter = await readJson(file);
         const correctedHtml = applyControlledTextCorrection(chapter.content || '<p></p>', params?.change || {});
@@ -5168,6 +5843,7 @@ function buildMenu() {
                 { label: 'Statistiques', click: () => sendMenuAction('feature:stats') },
                 { type: 'separator' },
                 { label: 'Sauvegardes', click: () => sendMenuAction('feature:backups') },
+                { label: 'Corbeille', click: () => sendMenuAction('feature:trash') },
                 { label: 'Historique', click: () => sendMenuAction('feature:history') }
             ]
         },
@@ -5223,6 +5899,81 @@ function buildMenu() {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// -----------------------------------------------------------------------------
+// Durcissement des fenêtres : l'interface ne doit jamais pouvoir être remplacée
+// par une page distante (qui hériterait du pont window.ecrivain), ni ouvrir de
+// nouvelle fenêtre, ni obtenir une permission web (caméra, position, etc.).
+// -----------------------------------------------------------------------------
+const APP_INDEX_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
+const ALLOWED_WEB_PERMISSIONS = new Set(['clipboard-sanitized-write']);
+let permissionPolicyInstalled = false;
+
+function openHttpsExternally(url) {
+    if (/^https:\/\//i.test(String(url || ''))) {
+        shell.openExternal(String(url)).catch((error) => writeDiagnostic('WARN', 'Ouverture d’un lien externe impossible.', error));
+    }
+}
+
+function installPermissionPolicy(session) {
+    if (permissionPolicyInstalled || !session) return;
+    permissionPolicyInstalled = true;
+    session.setPermissionRequestHandler((_webContents, permission, callback) => callback(ALLOWED_WEB_PERMISSIONS.has(permission)));
+    session.setPermissionCheckHandler((_webContents, permission) => ALLOWED_WEB_PERMISSIONS.has(permission));
+    if (typeof session.setDevicePermissionHandler === 'function') session.setDevicePermissionHandler(() => false);
+}
+
+function hardenWebContents(webContents, { allowedUrl = null } = {}) {
+    webContents.setWindowOpenHandler(({ url }) => {
+        openHttpsExternally(url);
+        return { action: 'deny' };
+    });
+    webContents.on('will-navigate', (event, url) => {
+        const allowed = allowedUrl && (url === allowedUrl || url.startsWith(`${allowedUrl}#`));
+        if (allowed) return;
+        event.preventDefault();
+        openHttpsExternally(url);
+    });
+    webContents.on('will-frame-navigate', (details) => {
+        if (details.isMainFrame) return;
+        if (/^(?:https?|file|ftp):/i.test(String(details.url || ''))) details.preventDefault();
+    });
+    webContents.on('will-attach-webview', (event) => event.preventDefault());
+    installPermissionPolicy(webContents.session);
+}
+
+// -----------------------------------------------------------------------------
+// Fermeture : vidage de l'interface avant de quitter
+// -----------------------------------------------------------------------------
+let closeFlushDone = false;
+let closeInProgress = false;
+let quitRequested = false;
+let quitGuardPassed = false;
+
+function requestRendererFlush(timeoutMs = 6000) {
+    return new Promise((resolve) => {
+        const win = mainWindow;
+        const contents = win && !win.isDestroyed() ? win.webContents : null;
+        if (!contents || contents.isDestroyed() || contents.isCrashed() || contents.isLoading()) { resolve(false); return; }
+        let finished = false;
+        let timer = null;
+        let onDone = null;
+        const finish = (ok) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            if (onDone) ipcMain.removeListener('app:flushDone', onDone);
+            resolve(ok);
+        };
+        onDone = (event) => { if (event.sender === contents) finish(true); };
+        timer = setTimeout(() => {
+            writeDiagnostic('WARN', 'L’interface n’a pas confirmé l’enregistrement avant fermeture (délai dépassé).');
+            finish(false);
+        }, timeoutMs);
+        ipcMain.on('app:flushDone', onDone);
+        contents.send('app:flush-request');
+    });
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1440,
@@ -5240,6 +5991,32 @@ function createWindow() {
             sandbox: true,
             spellcheck: true
         }
+    });
+
+    closeFlushDone = false;
+    closeInProgress = false;
+    hardenWebContents(mainWindow.webContents, { allowedUrl: APP_INDEX_URL });
+
+    // Fermeture sans perte : on demande à l'interface d'enregistrer le chapitre en
+    // cours, puis on attend la fin de toutes les écritures avant de fermer vraiment.
+    mainWindow.on('close', (event) => {
+        if (closeFlushDone) return;
+        event.preventDefault();
+        if (closeInProgress) return;
+        closeInProgress = true;
+        (async () => {
+            try {
+                await requestRendererFlush();
+                await fsSafe.whenIdle();
+            } catch (error) {
+                writeDiagnostic('WARN', 'Vidage avant fermeture incomplet.', error);
+            } finally {
+                closeFlushDone = true;
+                closeInProgress = false;
+                if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+                if (quitRequested) app.quit();
+            }
+        })();
     });
 
     mainWindow.loadFile('index.html');
@@ -5401,6 +6178,13 @@ ipcMain.handle('chapter:create', async (_event, data) => createChapter(data?.tit
 ipcMain.handle('chapter:save', async (_event, chapter, options) => saveChapter(chapter, options || {}));
 ipcMain.handle('chapter:duplicate', async (_event, chapterId) => duplicateChapter(chapterId));
 ipcMain.handle('chapter:delete', async (_event, chapterId) => deleteChapter(chapterId));
+ipcMain.handle('chapter:deletePreview', async (_event, chapterId) => chapterDeletionPreview(chapterId));
+ipcMain.handle('trash:state', async () => trashState());
+ipcMain.handle('trash:restore', async (_event, entryId) => restoreTrashEntry(entryId));
+ipcMain.handle('trash:purge', async (_event, entryId) => purgeTrashEntry(entryId));
+ipcMain.handle('trash:empty', async () => emptyTrash());
+ipcMain.handle('trash:openFolder', async () => openTrashFolder());
+ipcMain.handle('chapter:setExcluded', async (_event, chapterId, excluded) => setChapterExcluded(chapterId, excluded));
 ipcMain.handle('chapter:changeLevel', async (_event, chapterId, direction) => changeChapterLevel(chapterId, direction));
 ipcMain.handle('chapters:reorder', async (_event, orderedIds) => reorderChapters(Array.isArray(orderedIds) ? orderedIds : []));
 ipcMain.handle('export:markdown', async () => exportMarkdown());
@@ -5434,7 +6218,7 @@ ipcMain.handle('stats:state', async () => statisticsState());
 ipcMain.handle('backups:state', async () => projectBackupsState());
 ipcMain.handle('search:project', async (_event, query, options) => searchProjectChapters(query, options || {}));
 ipcMain.handle('search:replaceProject', async (_event, query, replacement, options) => replaceAcrossProject(query, replacement, options || {}));
-ipcMain.handle('backups:create', async (_event, reason) => createProjectBackup(String(reason || 'Sauvegarde manuelle')));
+ipcMain.handle('backups:create', async (_event, reason) => createProjectBackup(String(reason || MANUAL_BACKUP_REASON), [], 'manual'));
 ipcMain.handle('backups:restore', async (_event, backupId) => restoreProjectBackup(backupId));
 ipcMain.handle('backups:openFolder', async () => openProjectBackupsFolder());
 ipcMain.handle('history:state', async (_event, chapterId) => chapterHistoryState(chapterId));
@@ -5460,6 +6244,7 @@ ipcMain.handle('preferences:state', async () => preferencesState());
 ipcMain.handle('preferences:save', async (_event, payload) => savePreferences(payload || {}));
 ipcMain.handle('preferences:reset', async () => savePreferences({ ...DEFAULT_PREFERENCES }));
 ipcMain.handle('preferences:pickProjectsDir', async () => pickDefaultProjectsDirectory());
+ipcMain.handle('preferences:pickBackupDir', async () => pickExternalBackupDirectory());
 ipcMain.handle('app:info', async () => applicationInfo());
 ipcMain.handle('app:openDataFolder', async () => openApplicationDataFolder());
 ipcMain.handle('app:openExternal', async (_event, url) => openExternalUrl(url));
@@ -5485,7 +6270,14 @@ process.on('unhandledRejection', (reason) => {
 app.on('child-process-gone', (_event, details) => {
     writeDiagnostic('ERROR', 'Un processus enfant Electron s’est arrêté.', details);
 });
+app.on('before-quit', () => { quitRequested = true; });
 app.on('before-quit', closeDiagnosticSession);
+// Ne jamais quitter au milieu d'une écriture : on attend la fin des opérations suivies.
+app.on('will-quit', (event) => {
+    if (quitGuardPassed || fsSafe.pendingCount() === 0) return;
+    event.preventDefault();
+    fsSafe.whenIdle(8000).finally(() => { quitGuardPassed = true; app.quit(); });
+});
 
 if (HAS_SINGLE_INSTANCE_LOCK) {
     app.whenReady().then(() => {
@@ -5503,3 +6295,27 @@ if (HAS_SINGLE_INSTANCE_LOCK) {
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
 });
+
+// Accès aux fonctions internes pour les tests automatisés (npm test). Jamais activé
+// en usage normal : sans la variable d'environnement, ce module n'exporte rien.
+if (process.env.ECRIVAIN_TEST === '1') {
+    module.exports = {
+        __test: {
+            APP_VERSION,
+            PROJECT_SCHEMA_VERSION,
+            MAX_MANUAL_BACKUPS,
+            MAX_AUTO_BACKUPS,
+            historyFilesToPrune,
+            selectChaptersForExport,
+            projectExportSettings,
+            htmlToBlocks,
+            buildDocx,
+            buildOdt,
+            buildEpub,
+            buildPrintHtml,
+            createProjectBackup,
+            listProjectBackups,
+            getCurrentProjectDir: () => currentProjectDir
+        }
+    };
+}

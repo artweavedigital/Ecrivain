@@ -37,7 +37,7 @@ les clés API enregistrées.
 
 ## Rechercher / remplacer — format avancé
 
-Avant diffusion de la bêta.10, vérifier au minimum :
+Avant diffusion de la bêta.11, vérifier au minimum :
 
 - recherche simple dans le chapitre courant, occurrence précédente et suivante ;
 - laisser la barre de recherche ouverte, reprendre la frappe dans le manuscrit et vérifier que le curseur ne quitte jamais la position de saisie ;
@@ -77,3 +77,39 @@ Avant diffusion de la bêta.10, vérifier au minimum :
 - confirmer : le mot doit rester présent et seul son format doit changer ;
 - vérifier qu’un champ « Remplacer par » vide **sans** format continue à supprimer les occurrences ;
 - vérifier que les modifications non encore enregistrées du chapitre courant ne sont pas perdues lors du remplacement global.
+
+## Bêta.11 — vérifications à faire sur un vrai manuscrit
+
+Faire d’abord une copie du projet.
+
+### Enregistrement et fermeture
+
+- taper quelques mots puis fermer la fenêtre aussitôt (sans attendre l’autosauvegarde) : à la réouverture, tout est là ;
+- fermer pendant que le synopsis global ou une note est en cours d’édition : rien n’est perdu ;
+- comparer le nombre de mots d’un chapitre avant et après l’ouverture dans cette version : un écart de quelques mots est normal (nouvelle méthode de comptage, tirets de dialogue non comptés).
+
+### Corbeille
+
+- supprimer un chapitre qui a des sous-chapitres et des notes liées : l’écran de confirmation l’annonce ;
+- **Projet → Corbeille** : l’élément est listé avec son nombre de mots ; **Restaurer** le remet à sa place avec ses sous-chapitres et ses notes ;
+- supprimer une note, la restaurer ;
+- **Supprimer définitivement** et **Vider la corbeille** demandent confirmation.
+
+### Sauvegardes
+
+- créer plusieurs sauvegardes manuelles et laisser des automatiques se produire : cinq de chaque sorte au plus ;
+- choisir un dossier de sauvegarde externe dans les **Préférences**, créer une sauvegarde : une copie apparaît dans `Ecrivain-sauvegardes/` ; débrancher le disque et recommencer : un message l’indique, la sauvegarde locale est faite ;
+- restaurer une sauvegarde : la corbeille et l’historique sont intacts, une sauvegarde « Avant restauration » a été créée.
+
+### Exports
+
+- **Projet → Configuration du document** : numérotation des pages et en-tête courant ;
+- marquer un chapitre « Coupé », un autre « Exclure de l’export » (clic droit sur le chapitre) : aucun des deux n’apparaît dans Word, OpenDocument, EPUB, PDF et Markdown, et l’export indique combien de chapitres ont été laissés de côté ;
+- Word, OpenDocument et PDF : la page de titre n’a ni numéro ni en-tête, la page 2 porte le numéro 2 ; avec « auteur et titre », les pages paires et impaires portent bien chacune le bon en-tête ;
+- ouvrir l’EPUB sur une liseuse : le sommaire montre les sous-chapitres sous leur chapitre ;
+- exporter deux fois le même EPUB : l’identifiant du livre ne change pas (visible dans les métadonnées de la liseuse).
+
+## Bêta.11.1 — espaces insécables dans les fichiers de mise en page
+
+- exporter le même chapitre en Word, OpenDocument et Markdown, puis l’ouvrir dans XPress ou Scribus : avant « ; », « ? », « ! » et « : », l’espace ne se coupe pas en fin de ligne et n’affiche ni carré ni espace anormale ;
+- vérifier que chaque chapitre et sous-chapitre commence sur une nouvelle page dans les fichiers Word, OpenDocument et PDF.

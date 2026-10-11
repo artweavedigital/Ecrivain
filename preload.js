@@ -7,7 +7,18 @@ contextBridge.exposeInMainWorld('ecrivain', {
         state: () => ipcRenderer.invoke('preferences:state'),
         save: (payload) => ipcRenderer.invoke('preferences:save', payload || {}),
         reset: () => ipcRenderer.invoke('preferences:reset'),
-        pickProjectsDir: () => ipcRenderer.invoke('preferences:pickProjectsDir')
+        pickProjectsDir: () => ipcRenderer.invoke('preferences:pickProjectsDir'),
+        pickBackupDir: () => ipcRenderer.invoke('preferences:pickBackupDir')
+    },
+    // Fermeture de la fenêtre : le processus principal demande à l'interface d'enregistrer
+    // le chapitre en cours, puis attend cet accusé avant de fermer.
+    appLifecycle: {
+        onFlushRequest: (callback) => {
+            const handler = () => callback();
+            ipcRenderer.on('app:flush-request', handler);
+            return () => ipcRenderer.removeListener('app:flush-request', handler);
+        },
+        flushDone: () => ipcRenderer.send('app:flushDone')
     },
     appInfo: {
         state: () => ipcRenderer.invoke('app:info'),
@@ -52,8 +63,17 @@ contextBridge.exposeInMainWorld('ecrivain', {
         save: (chapter, options) => ipcRenderer.invoke('chapter:save', chapter, options || {}),
         duplicate: (chapterId) => ipcRenderer.invoke('chapter:duplicate', chapterId),
         delete: (chapterId) => ipcRenderer.invoke('chapter:delete', chapterId),
+        deletePreview: (chapterId) => ipcRenderer.invoke('chapter:deletePreview', chapterId),
+        setExcluded: (chapterId, excluded) => ipcRenderer.invoke('chapter:setExcluded', chapterId, excluded === true),
         changeLevel: (chapterId, direction) => ipcRenderer.invoke('chapter:changeLevel', chapterId, direction),
         reorder: (orderedIds) => ipcRenderer.invoke('chapters:reorder', orderedIds)
+    },
+    trash: {
+        state: () => ipcRenderer.invoke('trash:state'),
+        restore: (entryId) => ipcRenderer.invoke('trash:restore', entryId),
+        purge: (entryId) => ipcRenderer.invoke('trash:purge', entryId),
+        empty: () => ipcRenderer.invoke('trash:empty'),
+        openFolder: () => ipcRenderer.invoke('trash:openFolder')
     },
     globalSynopsis: {
         state: () => ipcRenderer.invoke('globalSynopsis:state'),

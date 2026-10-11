@@ -4,7 +4,7 @@
     const $ = (id) => document.getElementById(id);
     const view = $('preferencesView');
     const fields = {
-        startup: $('prefStartup'), recentLimit: $('prefRecentLimit'), projectsDir: $('prefProjectsDir'), autosave: $('prefAutosave'), spellcheck: $('prefSpellcheck'),
+        startup: $('prefStartup'), recentLimit: $('prefRecentLimit'), projectsDir: $('prefProjectsDir'), backupDir: $('prefBackupDir'), autosave: $('prefAutosave'), spellcheck: $('prefSpellcheck'),
         author: $('prefAuthor'), font: $('prefFont'), fontSize: $('prefFontSize'), lineSpacing: $('prefLineSpacing'),
         pageWidth: $('prefPageWidth'), pageHeight: $('prefPageHeight'), margin: $('prefMargin'), indent: $('prefIndent'), zoom: $('prefZoom')
     };
@@ -42,6 +42,7 @@
         fields.startup.value = p.startupBehavior || 'welcome';
         fields.recentLimit.value = String(p.recentProjectsLimit || 5);
         fields.projectsDir.value = p.defaultProjectsDir || '';
+        if (fields.backupDir) fields.backupDir.value = p.externalBackupDir || '';
         fields.autosave.value = String(p.autosaveDelayMs || 1800);
         if (fields.spellcheck) fields.spellcheck.value = p.spellcheckEnabled === false ? 'false' : 'true';
         fields.author.value = p.defaultAuthor || '';
@@ -72,6 +73,7 @@
             startupBehavior: fields.startup.value,
             recentProjectsLimit: Number(fields.recentLimit.value),
             defaultProjectsDir: fields.projectsDir.value.trim(),
+            externalBackupDir: fields.backupDir ? fields.backupDir.value.trim() : '',
             autosaveDelayMs: Number(fields.autosave.value),
             spellcheckEnabled: fields.spellcheck ? fields.spellcheck.value !== 'false' : true,
             defaultAuthor: fields.author.value.trim(),
@@ -251,6 +253,8 @@
     $('preferencesSave')?.addEventListener('click', savePreferences);
     $('preferencesReset')?.addEventListener('click', resetPreferences);
     $('prefChooseProjectsDir')?.addEventListener('click', async () => { const r = await window.ecrivain.preferences.pickProjectsDir(); if (!r?.canceled && r?.path) fields.projectsDir.value = r.path; });
+    $('prefChooseBackupDir')?.addEventListener('click', async () => { const r = await window.ecrivain.preferences.pickBackupDir(); if (!r?.canceled && r?.path && fields.backupDir) fields.backupDir.value = r.path; });
+    $('prefClearBackupDir')?.addEventListener('click', () => { if (fields.backupDir) fields.backupDir.value = ''; });
     $('prefOpenData')?.addEventListener('click', () => window.ecrivain.appInfo.openDataFolder().catch(() => {}));
     $('prefOpenExtensions')?.addEventListener('click', async () => { try { await window.ecrivain.plugins.openFolder(); } catch (_) {} });
     infoXClose?.addEventListener('click', closeOverlay);

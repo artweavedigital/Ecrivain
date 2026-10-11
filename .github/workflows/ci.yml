@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Les tests n'ont pas besoin du binaire d'Electron (le module « electron » est simulé).
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+jobs:
+  tests:
+    name: Vérifications et tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Installer les dépendances
+        shell: bash
+        # Avec un package-lock.json versionné, « npm ci » donne une installation reproductible.
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+      - name: Vérification de la syntaxe
+        run: npm run check
+      - name: Tests automatisés
+        run: npm test
+
+  interface:
+    name: Test de l'interface (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Installer les dépendances et Chromium
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          npm install --no-save --no-audit --no-fund playwright
+          npx playwright install --with-deps chromium
+      - name: Test de fumée de l'interface complète
+        run: npm run test:ui

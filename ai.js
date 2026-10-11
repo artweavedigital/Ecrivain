@@ -141,10 +141,8 @@
     }
 
     function stripHtml(html) {
-        const box = document.createElement('div');
-        box.innerHTML = String(html || '');
-        return (box.innerText || box.textContent || '')
-            .replace(/\u00a0/g, ' ')
+        return window.EcrivainText.htmlToPlainText(html)
+            .replace(/ /g, ' ')
             .replace(/[ \t]+\n/g, '\n')
             .replace(/\n{3,}/g, '\n\n')
             .trim();

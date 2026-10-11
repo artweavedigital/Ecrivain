@@ -4451,3 +4451,59 @@ body.is-fullscreen .projectbar { padding-right:210px; }
     .search-format-grid { grid-template-columns: 1fr; }
     .search-format-field--wide { grid-column: auto; }
 }
+
+/* =========================================================
+   0.6.0 bêta 11 — SAUVEGARDES ET CORBEILLE (onglets)
+   ========================================================= */
+
+.safety-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #e2d8cf;
+}
+
+.safety-tab {
+    padding: 8px 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: #7a6f66;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.safety-tab:hover { color: #4e463f; }
+.safety-tab.is-active { color: #4e463f; border-bottom-color: var(--accent); }
+.safety-tab__count { margin-left: 4px; padding: 1px 6px; border-radius: 999px; background: #efe5dc; color: #7b6657; font-size: 10px; }
+.safety-tab__count:empty { display: none; }
+
+.safety-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.safety-panel[hidden] { display: none !important; }
+.safety-summary { flex-wrap: wrap; }
+.safety-summary__spacer { flex: 1; }
+.safety-summary .button { white-space: nowrap; }
+
+.safety-note {
+    margin: 0;
+    color: #756b63;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.safety-note:empty { display: none; }
+
+.backup-card__rank--manual { background: #e4eadb; color: #55663f; }
+.backup-card__rank--auto { background: #e6e9ef; color: #4f5d75; }
+.trash-card .backup-card__actions { gap: 8px; }
+
+.preference-folder-row--clearable { grid-template-columns: minmax(0,1fr) auto auto; }
+

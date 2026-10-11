@@ -10,6 +10,19 @@
         backupsCount: $('backupsCount'),
         backupsEmpty: $('backupsEmpty'),
         backupsGrid: $('backupsGrid'),
+        backupsQuota: $('backupsQuota'),
+        backupsExternalInfo: $('backupsExternalInfo'),
+        backupsPanel: $('backupsPanel'),
+        trashPanel: $('trashPanel'),
+        tabBackups: $('safetyTabBackups'),
+        tabTrash: $('safetyTabTrash'),
+        trashTabCount: $('trashTabCount'),
+        trashCount: $('trashCount'),
+        trashSize: $('trashSize'),
+        trashEmptyMessage: $('trashEmpty'),
+        trashEmptyBtn: $('trashEmptyBtn'),
+        trashOpenFolder: $('trashOpenFolderBtn'),
+        trashGrid: $('trashGrid'),
         historyView: $('historyView'),
         historyBack: $('historyBackBtn'),
         historyRefresh: $('historyRefreshBtn'),
@@ -36,6 +49,7 @@
     };
 
     if (!ui.backupsView || !ui.historyView || !window.ecrivain?.backups || !window.ecrivain?.history) return;
+    const hasTrash = Boolean(ui.trashPanel && window.ecrivain?.trash);
 
     const state = {
         project: null,
@@ -105,22 +119,59 @@
         return payload;
     }
 
+    function selectTab(name) {
+        const trash = name === 'trash' && hasTrash;
+        if (ui.backupsPanel) ui.backupsPanel.hidden = trash;
+        if (ui.trashPanel) ui.trashPanel.hidden = !trash;
+        ui.tabBackups?.classList.toggle('is-active', !trash);
+        ui.tabBackups?.setAttribute('aria-selected', trash ? 'false' : 'true');
+        ui.tabTrash?.classList.toggle('is-active', trash);
+        ui.tabTrash?.setAttribute('aria-selected', trash ? 'true' : 'false');
+    }
+
     async function openBackups() {
         try {
             await projectState();
             hideAllFeatureViews('backupsView');
+            selectTab('backups');
             await refreshBackups();
+            if (hasTrash) refreshTrash({ quiet: true }).catch(() => {});
         } catch (error) {
             toast(error.message || 'Impossible d’ouvrir les sauvegardes.', true);
         }
     }
 
+    async function openTrash() {
+        try {
+            await projectState();
+            hideAllFeatureViews('backupsView');
+            selectTab('trash');
+            await refreshTrash();
+            refreshBackups().catch(() => {});
+        } catch (error) {
+            toast(error.message || 'Impossible d’ouvrir la corbeille.', true);
+        }
+    }
+
+    function countLabel(count, singular, pluralForm) {
+        return `${count.toLocaleString('fr-FR')} ${count > 1 ? pluralForm : singular}`;
+    }
+
     async function refreshBackups() {
         const payload = await window.ecrivain.backups.state();
         state.backups = Array.isArray(payload?.backups) ? payload.backups : [];
-        const n = state.backups.length;
-        ui.backupsCount.textContent = `${n} ${n > 1 ? 'sauvegardes' : 'sauvegarde'} sur ${payload?.maxBackups || 5}`;
-        ui.backupsEmpty.hidden = n > 0;
+        const maxManual = Number(payload?.maxManual || 5);
+        const maxAuto = Number(payload?.maxAuto || 5);
+        const manual = state.backups.filter((item) => item.kind === 'manual').length;
+        const auto = state.backups.length - manual;
+        ui.backupsCount.textContent = `${countLabel(manual, 'sauvegarde manuelle', 'sauvegardes manuelles')} · ${countLabel(auto, 'automatique', 'automatiques')}`;
+        if (ui.backupsQuota) ui.backupsQuota.textContent = `Rotation : ${maxManual} manuelles et ${maxAuto} automatiques au maximum`;
+        if (ui.backupsExternalInfo) {
+            ui.backupsExternalInfo.textContent = payload?.externalDir
+                ? `Copie externe active : ${payload.externalDir}. Chaque sauvegarde y est aussi copiée (les dix plus récentes y sont conservées).`
+                : 'Aucune copie externe : des sauvegardes stockées uniquement dans le dossier du projet ne protègent pas d’une panne de disque. Un dossier externe (clé USB, disque, dossier synchronisé) peut être choisi dans Préférences.';
+        }
+        ui.backupsEmpty.hidden = state.backups.length > 0;
         ui.backupsGrid.innerHTML = '';
 
         for (let i = 0; i < state.backups.length; i += 1) {
@@ -129,8 +180,9 @@
             card.className = 'backup-card';
 
             const rank = document.createElement('span');
-            rank.className = 'backup-card__rank';
-            rank.textContent = i === 0 ? 'La plus récente' : `Sauvegarde ${i + 1}`;
+            const isManual = item.kind === 'manual';
+            rank.className = `backup-card__rank ${isManual ? 'backup-card__rank--manual' : 'backup-card__rank--auto'}`;
+            rank.textContent = `${isManual ? 'Manuelle' : 'Automatique'}${i === 0 ? ' · la plus récente' : ''}`;
 
             const title = document.createElement('h3');
             title.textContent = formatDateTime(item.createdAt);
@@ -140,7 +192,11 @@
 
             const meta = document.createElement('div');
             meta.className = 'backup-card__meta';
-            meta.innerHTML = `<span>${formatBytes(item.sizeBytes)}</span><span>Projet complet</span>`;
+            for (const text of [formatBytes(item.sizeBytes), 'Projet complet']) {
+                const chip = document.createElement('span');
+                chip.textContent = text;
+                meta.appendChild(chip);
+            }
 
             const actions = document.createElement('div');
             actions.className = 'backup-card__actions';
@@ -177,6 +233,109 @@
             toast(error.message || 'Sauvegarde impossible.', true);
         } finally {
             ui.backupsCreate.disabled = false;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Corbeille
+    // ---------------------------------------------------------------------
+
+    function renderTrash(payload) {
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        state.trash = items;
+        ui.trashCount.textContent = countLabel(items.length, 'élément', 'éléments');
+        ui.trashSize.textContent = items.length ? formatBytes(payload?.totalBytes) : '';
+        if (ui.trashTabCount) ui.trashTabCount.textContent = items.length ? String(items.length) : '';
+        ui.trashEmptyMessage.hidden = items.length > 0;
+        ui.trashEmptyBtn.disabled = items.length === 0;
+        ui.trashGrid.innerHTML = '';
+
+        for (const item of items) {
+            const card = document.createElement('article');
+            card.className = 'backup-card trash-card';
+
+            const rank = document.createElement('span');
+            rank.className = 'backup-card__rank';
+            rank.textContent = item.kind === 'note' ? 'Note' : (item.chapterCount > 1 ? 'Chapitre et sous-chapitres' : 'Chapitre');
+
+            const title = document.createElement('h3');
+            title.textContent = item.title || 'Sans titre';
+
+            const when = document.createElement('p');
+            when.textContent = item.incomplete
+                ? 'Élément incomplet (manifeste illisible) : le dossier peut être inspecté à la main.'
+                : `Supprimé le ${formatDateTime(item.deletedAt)}`;
+
+            const meta = document.createElement('div');
+            meta.className = 'backup-card__meta';
+            const chips = [];
+            if (item.kind !== 'note') {
+                chips.push(countLabel(item.chapterCount, 'chapitre', 'chapitres'));
+                chips.push(countLabel(item.wordCount, 'mot', 'mots'));
+            }
+            if (item.noteCount > 0) chips.push(countLabel(item.noteCount, 'note liée', 'notes liées'));
+            chips.push(formatBytes(item.sizeBytes));
+            for (const text of chips) {
+                const chip = document.createElement('span');
+                chip.textContent = text;
+                meta.appendChild(chip);
+            }
+
+            const actions = document.createElement('div');
+            actions.className = 'backup-card__actions';
+
+            const purge = document.createElement('button');
+            purge.type = 'button';
+            purge.className = 'button button-danger';
+            purge.textContent = 'Supprimer définitivement';
+            purge.addEventListener('click', async () => {
+                purge.disabled = true;
+                try {
+                    const result = await window.ecrivain.trash.purge(item.id);
+                    if (result?.trash) renderTrash(result.trash);
+                    if (result && !result.canceled) toast('Élément supprimé définitivement.');
+                } catch (error) {
+                    toast(error.message || 'Suppression impossible.', true);
+                } finally {
+                    purge.disabled = false;
+                }
+            });
+
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'button button-primary';
+            restore.textContent = 'Restaurer';
+            restore.addEventListener('click', async () => {
+                restore.disabled = true;
+                try {
+                    const result = await window.ecrivain.trash.restore(item.id);
+                    if (result?.trash) renderTrash(result.trash);
+                    if (result?.project) window.ecrivainApp?.refreshChapterList?.(result.project);
+                    const r = result?.restored || { chapters: 0, notes: 0, skipped: [] };
+                    const parts = [];
+                    if (r.chapters) parts.push(countLabel(r.chapters, 'chapitre restauré', 'chapitres restaurés'));
+                    if (r.notes) parts.push(countLabel(r.notes, 'note restaurée', 'notes restaurées'));
+                    let message = parts.length ? `${parts.join(' et ')}.` : 'Rien à restaurer.';
+                    if (r.skipped?.length) message += ` Éléments laissés dans la corbeille (déjà présents) : ${r.skipped.join(', ')}.`;
+                    toast(message, !parts.length);
+                } catch (error) {
+                    toast(error.message || 'Restauration impossible.', true);
+                } finally {
+                    restore.disabled = false;
+                }
+            });
+
+            actions.append(purge, restore);
+            card.append(rank, title, when, meta, actions);
+            ui.trashGrid.appendChild(card);
+        }
+    }
+
+    async function refreshTrash({ quiet = false } = {}) {
+        try {
+            renderTrash(await window.ecrivain.trash.state());
+        } catch (error) {
+            if (!quiet) toast(error.message || 'Impossible de lire la corbeille.', true);
         }
     }
 
@@ -432,6 +591,24 @@
     }
 
     ui.backupsBack.addEventListener('click', () => window.ecrivainApp?.showManuscript?.());
+    ui.tabBackups?.addEventListener('click', () => { selectTab('backups'); refreshBackups().catch(() => {}); });
+    ui.tabTrash?.addEventListener('click', () => { selectTab('trash'); refreshTrash(); });
+    ui.trashOpenFolder?.addEventListener('click', async () => {
+        try { await window.ecrivain.trash.openFolder(); }
+        catch (error) { toast(error.message || 'Impossible d’ouvrir le dossier.', true); }
+    });
+    ui.trashEmptyBtn?.addEventListener('click', async () => {
+        ui.trashEmptyBtn.disabled = true;
+        try {
+            const result = await window.ecrivain.trash.empty();
+            if (result?.trash) renderTrash(result.trash);
+            if (result && !result.canceled) toast('Corbeille vidée.');
+        } catch (error) {
+            toast(error.message || 'Impossible de vider la corbeille.', true);
+        } finally {
+            ui.trashEmptyBtn.disabled = !state.trash?.length;
+        }
+    });
     ui.backupsCreate.addEventListener('click', createBackup);
     ui.backupsOpenFolder.addEventListener('click', async () => {
         try { await window.ecrivain.backups.openFolder(); }
@@ -444,6 +621,7 @@
 
     window.ecrivainSafety = {
         openBackups,
+        openTrash,
         openHistory
     };
 })();

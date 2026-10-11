@@ -74,24 +74,22 @@
         return chapter ? chapter.title : 'Chapitre lié';
     }
 
+    // Texte brut sans passer par le DOM (aucun contenu de note n'est jamais interprété ici).
     function stripHtml(html) {
-        const box = document.createElement('div');
-        box.innerHTML = html || '';
-        return (box.textContent || '').replace(/\s+/g, ' ').trim();
+        return window.EcrivainText.htmlToPlainText(html).replace(/\s+/g, ' ').trim();
     }
 
+    // Filtre à liste blanche partagé (shared/html-sanitize.js). En cas d'échec imprévu,
+    // le texte est conservé tel quel, échappé : on ne perd jamais le contenu d'une note.
     function sanitizeHtml(html) {
-        const doc = new DOMParser().parseFromString(`<div>${String(html || '')}</div>`, 'text/html');
-        doc.querySelectorAll('script,style,iframe,object,embed,link,meta,base').forEach((el) => el.remove());
-        doc.querySelectorAll('*').forEach((el) => {
-            for (const attr of Array.from(el.attributes)) {
-                const name = attr.name.toLowerCase();
-                const value = String(attr.value || '').trim().toLowerCase();
-                if (name.startsWith('on')) el.removeAttribute(attr.name);
-                if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) el.removeAttribute(attr.name);
-            }
-        });
-        return doc.body.firstElementChild?.innerHTML || '<p></p>';
+        const source = String(html || '') || '<p></p>';
+        try {
+            return window.EcrivainSanitize.sanitizeHtml(source).html || '<p></p>';
+        } catch (_) {
+            const text = window.EcrivainText.htmlToPlainText(source)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return text.split(/\n+/).map((line) => `<p>${line}</p>`).join('') || '<p></p>';
+        }
     }
 
     function colorInfo(key) {
@@ -385,14 +383,14 @@
 
     async function removeNote(note) {
         if (!note) return;
-        const ok = window.confirm(`Supprimer la note « ${note.title || 'Note'} » ?${note.type === 'file' ? '\nLe fichier joint sera également supprimé du projet.' : ''}`);
+        const ok = window.confirm(`Mettre la note « ${note.title || 'Note'} » à la corbeille ?${note.type === 'file' ? '\nLe fichier joint la suivra.' : ''}\nVous pourrez la restaurer depuis Projet → Corbeille.`);
         if (!ok) return;
         try {
             state.notes = await window.ecrivain.notes.delete(note.id);
             state.activeNoteId = null;
             showList();
             renderList();
-            toast('Note supprimée.');
+            toast('Note placée dans la corbeille.');
         } catch (error) {
             toast(error.message || 'Impossible de supprimer la note.', true);
         }

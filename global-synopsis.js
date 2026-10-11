@@ -25,6 +25,7 @@
     const state = {
         data: null,
         dirty: false,
+        revision: 0,          // incrémenté à chaque frappe : détecte une modification pendant un enregistrement
         saving: false,
         timer: null
     };
@@ -107,31 +108,53 @@
     }
 
     async function save(silent = false) {
-        if (state.saving) return state.data;
+        // Un enregistrement est déjà en cours : on attend sa fin, puis on enregistre
+        // à nouveau si du texte a été saisi entre-temps (rien n'est jamais ignoré).
+        if (state.saving) {
+            await state.savingPromise?.catch(() => {});
+            return state.dirty ? save(true) : state.data;
+        }
         window.clearTimeout(state.timer);
         state.timer = null;
         state.saving = true;
+        const revision = state.revision;
         setSaveState('Enregistrement…', true);
-        try {
+        state.savingPromise = (async () => {
             const saved = await window.ecrivain.globalSynopsis.save(values());
             state.data = saved || values();
-            state.dirty = false;
+            // Si l'utilisateur a continué à écrire pendant l'enregistrement, le texte reste « à enregistrer ».
+            state.dirty = state.revision !== revision;
             ui.updated.textContent = `Dernière modification : ${formatDateTime(saved?.updatedAt)}`;
-            setSaveState(silent ? 'Enregistré automatiquement' : 'Enregistré', false);
-            if (!silent) toast('Synopsis global enregistré.');
+            setSaveState(state.dirty ? 'À enregistrer' : (silent ? 'Enregistré automatiquement' : 'Enregistré'), state.dirty);
+            if (!silent && !state.dirty) toast('Synopsis global enregistré.');
+            return saved;
+        })();
+        try {
+            const saved = await state.savingPromise;
+            state.saving = false;
+            if (state.dirty) state.timer = window.setTimeout(() => save(true).catch(() => {}), 400);
             return saved;
         } catch (error) {
+            state.saving = false;
             state.dirty = true;
             setSaveState('Erreur d’enregistrement', true);
             toast(error.message || 'Impossible d’enregistrer le synopsis global.', true);
             throw error;
-        } finally {
-            state.saving = false;
         }
+    }
+
+    // Termine tout enregistrement en cours ou en attente (fermeture de la fenêtre).
+    async function flush() {
+        window.clearTimeout(state.timer);
+        state.timer = null;
+        if (state.saving) await state.savingPromise?.catch(() => {});
+        if (state.dirty) await save(true);
+        return !state.dirty;
     }
 
     function markDirty() {
         state.dirty = true;
+        state.revision += 1;
         setSaveState('À enregistrer', true);
         renderCounters();
         window.clearTimeout(state.timer);
@@ -184,6 +207,7 @@
     window.ecrivainGlobalSynopsis = {
         open,
         save,
+        flush,
         isOpen: () => !ui.view.hidden,
         isDirty: () => state.dirty
     };
